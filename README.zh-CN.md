@@ -29,14 +29,14 @@
 ## 目录
 
 1. [为什么需要它](#1-为什么需要它)
-2. [功能特性](#2-功能特性)
-3. [环境要求](#3-环境要求)
-4. [安装](#4-安装)
-5. [快速开始](#5-快速开始)
-6. [工具参考](#6-工具参考)
-7. [Everything 查询语法速查](#7-everything-查询语法速查)
-8. [常见任务配方](#8-常见任务配方)
-9. [基准测试](#9-基准测试)
+2. [基准测试](#2-基准测试)
+3. [功能特性](#3-功能特性)
+4. [环境要求](#4-环境要求)
+5. [安装](#5-安装)
+6. [快速开始](#6-快速开始)
+7. [工具参考](#7-工具参考)
+8. [Everything 查询语法速查](#8-everything-查询语法速查)
+9. [常见任务配方](#9-常见任务配方)
 10. [架构](#10-架构)
 11. [安全与隐私](#11-安全与隐私)
 12. [已知限制](#12-已知限制)
@@ -75,7 +75,115 @@ Everything 维护一份常驻的 NTFS 索引（基于 USN journal），记录文
 这个服务器不替代 `read`/`edit`/shell 工具，它替代的是这些工具前面的**搜索**步骤 ——
 而那通常正是慢的部分。
 
-## 2. 功能特性
+下一节用三个真实语料量化这个差距，也包括索引**并不占优**的场景。
+
+## 2. 基准测试
+
+> **一句话结论** —— 在 `C:\Program Files`（427,637 个文件）里找所有 `*.dll`，
+> 走索引 **0.9 ms**，热递归扫描 **14,465 ms**：**快 15,504 倍**。引用任何数字前，
+> 请先看本节末尾的公平性说明。
+
+![C:\Program Files 上的查询延迟](benchmarks/charts/latency_programfiles.png)
+
+![相对原生递归扫描的加速比](benchmarks/charts/speedup.png)
+
+![随语料规模扩展](benchmarks/charts/scaling.png)
+
+测量时间 2026-10-18，环境 Windows 10 Pro（AMD Ryzen 7 5800H，16 GB 内存）、Everything 1.4.1.1024（3,243,750 条索引）、Python 3.11.7。原生基线：预热的 PowerShell 7.6.6，单个 `-NoProfile` 进程；MCP：工具背后同一函数的进程内调用。取 3 个样本的中位数（`C:\Program Files` 取 2 个），丢弃一次预热；加速比按“原生扫描 ÷ MCP 调用”计算。本次运行使用 `EV_SCAN_CAP=600000`，总耗时 517 秒。
+
+**C:\Windows\System32** —— 17,616 个文件，25,531 条索引
+
+| 场景 | 原生扫描（ms） | MCP（ms） | 加速比 | 命中数一致 |
+|---|---:|---:|---:|:---:|
+| 名称通配符 | 510 | 1.0 | 519× | no |
+| 名称正则 | 812 | 65.7 | 12.4× | yes |
+| 类型 + 大小 + 日期过滤 | 796 | 0.8 | 1,034× | no |
+| 按扩展名统计字节 | 760 | 346 | 2.2× | no |
+| 最大的 N 个文件 | 774 | 0.9 | 885× | yes |
+| ≥100MB 文件 | 693 | 1.3 | 514× | no |
+| 最近 7 天变更 | 669 | 0.9 | 780× | no |
+
+**C:\Program Files** —— 427,637 个文件，554,843 条索引
+
+| 场景 | 原生扫描（ms） | MCP（ms） | 加速比 | 命中数一致 |
+|---|---:|---:|---:|:---:|
+| 名称通配符 | 14,465 | 0.9 | 15,504× | no |
+| 类型 + 大小 + 日期过滤 | 20,805 | 12.8 | 1,626× | no |
+| 按扩展名统计字节 | 22,804 | 7,959 | 2.9× | no |
+| 最大的 N 个文件 | 27,435 | 8.7 | 3,154× | yes |
+| ≥100MB 文件 | 21,336 | 17.9 | 1,189× | no |
+
+**合成语料（30k 文件 / 200 目录）** —— 30,000 个文件，30,201 条索引
+
+| 场景 | 原生扫描（ms） | MCP（ms） | 加速比 | 命中数一致 |
+|---|---:|---:|---:|:---:|
+| 名称通配符 | 179 | 1.1 | 162× | yes |
+| 名称正则 | 797 | 72.3 | 11.0× | yes |
+| 类型 + 大小 + 日期过滤 | 438 | 1.0 | 453× | yes |
+| 按扩展名统计字节 | 554 | 526 | 1.1× | yes |
+| 最大的 N 个文件 | 724 | 0.9 | 792× | yes |
+| ≥100MB 文件 | 412 | 16.1 | 25.6× | yes |
+| 重复文件组 | 549 | 560 | 1.0× | yes |
+| 最近 7 天变更 | 440 | 15.9 | 27.7× | no |
+| 内容 grep | 21,001 | 1,354 | 15.5× | yes |
+| 单个小目录 | 3.0 | 0.7 | 4.1× | yes |
+
+MCP 侧是进程内调用，因此这些计时不含 JSON-RPC 传输：独立的端到端 MCP stdio 往返测量的中位数为 5.74 ms —— 需要整次调用延迟时请加上它。分组聚合与重复检测是 MCP 侧最弱的场景（约 1–3 倍），因为它们要通过 HTTP 每次 1000 行地分页扫描索引。200 文件的小目录在绝对时间上接近持平：3.0ms 对 0.7ms。
+
+**为什么计数不同。** 标记为 `no` 的行是合理差异而非错误：（a）受 ACL 保护的子树（如 `C:\Windows\System32\config\systemprofile` 与 `C:\Program Files\WindowsApps`）会被 Everything 索引，但普通用户权限的递归扫描无法枚举—— 这是最大的差异，方向是*索引计数更高*；（b）Windows 系统目录不断变化，部分索引条目会滞后于磁盘；（c）Everything 的 `dm:` 过滤是日期粒度，而原生基线使用精确的“当前时间 − 7×24h”窗口；（d）`size:` 单位是 KB 量化。计数仅作参考，不作为正确性判据 —— 真正重要的是查询语义与返回行。
+
+### 2.1 测试方法
+
+基准测试框架位于 [`benchmarks/`](benchmarks/)，可复现：`benchmarks/bench.py` 驱动
+两侧对比，`benchmarks/native_baseline.ps1` 是 PowerShell 基线，
+`benchmarks/gen_dataset.py` 生成合成语料。
+
+- **同一语料、同一查询、两侧对比。** 每个场景在完全相同的文件集与相同的路径范围上运行：
+  一次原生 PowerShell 递归扫描，与等价的 Everything 索引查询。
+- **原生基线是预热且地道的 PowerShell 7.6.6。** `Get-ChildItem`、`Where-Object` 与
+  `findstr` 在单个 `pwsh -NoProfile` 进程内运行，用 `[Diagnostics.Stopwatch]` 计时。
+  排除 shell 启动时间，丢弃一次预热，每个场景取 3 个样本的中位数（`C:\Program Files`
+  的 16–27 秒扫描取 2 个样本）。分组使用 O(n) 哈希表而不是 `Group-Object`，因为
+  PowerShell 5.1 的 `Group-Object` 在 3 万条数据上要 36 秒 —— 基线是地道的，而不是
+  被人为拖慢。这是扫描的*最好情况*。
+- **MCP 侧走同一代码路径、在进程内测量。** 每次测量都调用 MCP 工具背后的同一个函数，
+  查询与路径范围完全相同；另有独立的端到端 stdio 测量报告 JSON-RPC 开销（参考机器上
+  中位数 5.74ms）。
+- **校验正确性，而不是假设。** 每个场景都对比原生与 MCP 的命中数；合理的差异（返回上限、
+  索引范围、受 ACL 保护的子树、KB 量化的 `size:` 语法、日期粒度的 `dm:`）记录在
+  `count_match` / `count_note` 中并在上文解释，而不是隐藏。
+- **语料：** `C:\Windows\System32`（小，约 17.6k 文件）、`C:\Program Files`
+  （大，约 427.6k 文件），以及生成的合成目录树（30k 文件、200 个目录、已知扩展名/大小/
+  修改时间分布、约 350 个与重复检测相关的文件）。完整运行使用 `EV_SCAN_CAP=600000`，
+  以便聚合场景能覆盖整个 `C:\Program Files`；其余设置均为默认值。
+
+### 2.2 公平性说明 —— 引用数字前请先读
+
+> **一句话诚实总结：** 这些数字比较的是“查询预建索引”与“现场递归扫描”。它们衡量的
+> 是拥有索引带来的价值，而不是什么更快的魔法文件系统。范围很小或缓存已热时，差距会
+> 缩小到接近持平；语料很大且重复查询时，差距才显著。Everything 仅支持 Windows/NTFS；
+> `everything_grep` 的速度来自 ripgrep 加很小的候选集，而不是索引本身。
+
+- **索引是预建并持续维护的。** Everything 的优势来自它已经遍历过文件系统一次，并通过
+  USN journal 跟踪变化。基准测试比较的是“查询这份索引”与“现场扫描”，并没有比较
+  “建索引成本”与“扫描成本”。索引的构建与维护成本仍然要有人承担。
+- **冷缓存与极小范围会抹平优势。** 如果目标目录的元数据已经在内存中，原生扫描可能只要
+  几毫秒；此时 MCP 往返加 HTTP 查询可能持平甚至更慢。加速比随语料规模与重复查询次数
+  增长。
+- **仅 Windows 与 NTFS。** Everything 无法索引 Linux 文件系统、网络共享（默认）、
+  FAT/exFAT 卷，或你没加入索引的卷。这里没有可移植的等价物。
+- **内容搜索是 ripgrep，不是 Everything。** `everything_grep` 的速度取决于候选目录树、
+  文件大小、忽略规则与 pattern —— 与 Everything 索引无关。但它仍远快于全盘 grep，
+  因为候选集很小。
+- **聚合与重复检测是 MCP 侧最弱的场景。** `everything_summary` 与
+  `everything_duplicates` 通过 HTTP 每页 1000 行分页扫描索引，因此加速比大约只有
+  1–3 倍，而不是单次过滤查询那种三位数。它们有界且可预测，但不是索引最擅长的场景。
+- **索引的内存与磁盘是真实成本。** Everything 把索引常驻内存并落盘（数百万条目的机器
+  上是数百 MB）。基准数字不包含这部分开销。
+- **除单独报告的 stdio 往返测量外，每次操作的计时不含工具调用开销**。Agent 每次调用
+  都要付这份开销。
+
+## 3. 功能特性
 
 - **面向 Agent 设计的 13 个工具**：
   - **7 个查询工具** —— `everything_search`、`everything_count`、
@@ -108,21 +216,21 @@ Everything 维护一份常驻的 NTFS 索引（基于 USN journal），记录文
 - **兼容任意 MCP 客户端。** 主要目标是 DSH（工具名 `mcp__everything__*`），
   但传输层就是标准 MCP stdio。
 
-## 3. 环境要求
+## 4. 环境要求
 
 | 要求 | 说明 |
 |---|---|
 | 操作系统 | Windows 10 或 11，文件位于 **NTFS** 卷。Everything 索引 NTFS；FAT/exFAT 与网络共享默认不被索引，除非你手动添加。 |
 | Everything | [voidtools Everything](https://www.voidtools.com/) **1.4.1 或更新**，已安装并正在运行。已在 **1.4.1.1024** 上验证；1.5 预期可用，但能力矩阵尚未在 1.5 上重新验证。 |
-| Everything HTTP Server | 已启用并绑定到 **`127.0.0.1:8090`**（见[安装](#4-安装)）。 |
+| Everything HTTP Server | 已启用并绑定到 **`127.0.0.1:8090`**（见[安装](#5-安装)）。 |
 | Python | **3.10+**（在 3.11.7 上实测），安装官方 `mcp` SDK **≥ 1.2.0**。 |
 | MCP 客户端 | 推荐 DSH（DeepSeek Harness）；任意 MCP stdio 客户端均可。 |
 | ripgrep | 可选，仅 `everything_grep` 需要。自动探测；找不到时见[故障排查](#13-故障排查)。 |
 | 权限 | 不需要。无需管理员权限，不改系统服务，不在配置根目录外写文件。 |
 
-## 4. 安装
+## 5. 安装
 
-### 4.1 启用 Everything 内置 HTTP Server
+### 5.1 启用 Everything 内置 HTTP Server
 
 服务器通过 Everything 内置的 HTTP JSON API 查询。该功能**默认关闭**，而且 Everything
 的 HTTP 接口**没有认证**，因此必须只监听回环地址。
@@ -176,7 +284,7 @@ pwsh -File scripts\setup.ps1
 
 </details>
 
-### 4.2 克隆与安装
+### 5.2 克隆与安装
 
 推荐：可编辑安装。它会把 `mcp` 依赖装好，并提供 `dsh-everything-mcp` 命令行入口：
 
@@ -206,7 +314,7 @@ python server.py            # 或：python <PATH-TO-REPO>\server.py，任意 cwd
 只读自检（探测 HTTP 端点），结果写入 **stderr**（stdout 留给 MCP 协议）。自检失败
 不会让进程退出 —— 首次工具调用会重试并返回可操作的指引。
 
-### 4.3 注册到 DSH
+### 5.3 注册到 DSH
 
 DSH 通过 `@deepseek-ai/dsh-mcp-client` 挂载 MCP 服务器。把条目加入目标 profile 的
 patch 文件：
@@ -253,7 +361,7 @@ patch 文件是一个**顶层 YAML 数组**（loader 条目列表）；把下面
 - DSH 会从子进程环境中清洗 `DSH_*` 和形似密钥的变量；`EV_*` 会原样传递。
 - 其他 MCP 客户端：改用 [`examples/mcp.json`](examples/mcp.json)。
 
-### 4.4 重启 `dsh web`
+### 5.4 重启 `dsh web`
 
 Profile 改动在启动时生效。编辑 patch 后请重启 `dsh web`。
 
@@ -262,7 +370,7 @@ Profile 改动在启动时生效。编辑 patch 后请重启 `dsh web`。
 > `cannot get required service "sessionProjections" in inactive context`。
 > 重启 `dsh web` 即可恢复。推荐流程始终是：编辑 profile → 重启。
 
-### 4.5 验证
+### 5.5 验证
 
 让 Agent 先调用 `mcp__everything__everything_status`，再调用
 `mcp__everything__everything_search`：
@@ -274,7 +382,7 @@ Profile 改动在启动时生效。编辑 patch 后请重启 `dsh web`。
 `everything_status` 会返回 `ok: true`、Everything 版本、索引条目数与 HTTP 端点状态。
 如果报告异常，按其中的 `hints` 数组或[故障排查](#13-故障排查)表处理。
 
-### 4.6 环境变量
+### 5.6 环境变量
 
 所有配置都通过环境变量完成，每个变量都有可用默认值；只改你需要的即可。
 
@@ -299,11 +407,11 @@ Profile 改动在启动时生效。编辑 patch 后请重启 `dsh web`。
 | `EV_LOG_LEVEL` | `INFO` | 日志级别；日志只写 stderr。 |
 | `EV_SKIP_SELF_CHECK` | 空 | 设为 `1` 跳过启动时的 HTTP 自检。 |
 
-## 5. 快速开始
+## 6. 快速开始
 
 覆盖大多数 Agent 需求的五次调用。“意图”是用户说的话；JSON 是精确的工具参数对象。
 
-### 5.1 查找文件
+### 6.1 查找文件
 
 *“找到 Q3 预算表，最新的优先。”*
 
@@ -319,7 +427,7 @@ Profile 改动在启动时生效。编辑 patch 后请重启 `dsh web`。
 
 返回最新的匹配工作簿及完整路径。引号强制精确短语；不加引号时两个词是 AND 关系。
 
-### 5.2 按扩展名计数
+### 6.2 按扩展名计数
 
 *“这个项目里有多少 Python 文件？”*
 
@@ -329,7 +437,7 @@ Profile 改动在启动时生效。编辑 patch 后请重启 `dsh web`。
 
 返回 `{"total": 1284, ...}`，不返回文件列表 —— 最省 token 的存在性判断。
 
-### 5.3 搜索文件内容
+### 6.3 搜索文件内容
 
 *“后端哪里提到了 TODO？”*
 
@@ -345,7 +453,7 @@ Profile 改动在启动时生效。编辑 patch 后请重启 `dsh web`。
 返回 `matches[]`（含 `path`、`line`、`column`、`text`）与 ripgrep 统计。这是 ripgrep
 在候选目录上的内容搜索，不是 Everything 索引查询。
 
-### 5.4 最大的 N 个文件
+### 6.4 最大的 N 个文件
 
 *“这台机器上最大的十个 ISO 镜像是什么？”*
 
@@ -360,9 +468,9 @@ Profile 改动在启动时生效。编辑 patch 后请重启 `dsh web`。
 ```
 
 `sort=size` 配 `ascending=false` 让最大的排最前。需要精确字节阈值时用无单位数值
-（见 §7）。
+（见 §8）。
 
-### 5.5 最近变更
+### 6.5 最近变更
 
 *“我的项目这周改了什么？”*
 
@@ -371,9 +479,9 @@ Profile 改动在启动时生效。编辑 patch 后请重启 `dsh web`。
 ```
 
 按修改时间倒序返回窗口内的文件，并附 `window` 对象说明精确时间边界。日期粒度注意事项
-见 §6.12。
+见 §7.12。
 
-## 6. 工具参考
+## 7. 工具参考
 
 所有工具都返回 JSON 对象。错误以 MCP 工具错误形式抛出，消息可操作。在 DSH 中每个
 名字都要加前缀 `mcp__everything__`（例如 `mcp__everything__everything_search`）。
@@ -394,7 +502,7 @@ Profile 改动在启动时生效。编辑 patch 后请重启 `dsh web`。
 | 12 | `everything_changes` | 组合 | 列出时间窗内变更的文件 | `since`、`path_scope`、`exts`、`max_results`、`sort`、`ascending` | `items[]`、`window`、`count`、`total`、`warnings[]` |
 | 13 | `everything_reveal` | 组合 | 在资源管理器中定位/打开路径（唯一副作用工具） | `path` | `ok`、`opened`、`mode` |
 
-### 6.1 `everything_search`
+### 7.1 `everything_search`
 
 Everything 原生搜索，支持分页与字段裁剪。`regex=true` 把 query 当正则解释；
 `path_scope` 会被组合进 Everything 查询（`path:"..."`）**并**在客户端二次校验
@@ -441,7 +549,7 @@ Everything 请求。
 `name`、`path`、`size`、`date_modified`；其他值会告警并回退 name 升序。name 排序是
 Everything 的**自然排序**，不是码点序 —— 不要断言严格字典序。
 
-### 6.2 `everything_count`
+### 7.2 `everything_count`
 
 最省的问题：存不存在，有多少个？
 
@@ -454,7 +562,7 @@ Everything 的**自然排序**，不是码点序 —— 不要断言严格字典
  "total": 1284, "elapsed_ms": 11.4, "channel": "http", "warnings": []}
 ```
 
-### 6.3 `everything_status`
+### 7.3 `everything_status`
 
 无参数。任何不对劲时先调它。
 
@@ -490,13 +598,13 @@ Everything 的**自然排序**，不是码点序 —— 不要断言严格字典
 `hints[]` 给出可操作建议（例如哪些 ini 索引开关关闭、为什么 `dc:`/`da:`/`attrib:`
 查询很慢）。
 
-### 6.4 `everything_help`
+### 7.4 `everything_help`
 
 无参数。自解释入口：支持语法、不支持语法、慢查询、HTTP 参数矩阵、全部 13 个工具、
 示例调用与提示。同样的内容以 markdown 字符串放在 `markdown` 字段，也作为
 `everything://help/syntax` 资源提供。不确定某个查询前缀是否可用时先调它。
 
-### 6.5 `everything_presets`
+### 7.5 `everything_presets`
 
 ```json
 {"action": "list"}
@@ -524,9 +632,9 @@ Everything 的**自然排序**，不是码点序 —— 不要断言严格字典
 内置：`recent_modified_7d`、`today_changed`、`large_files_100mb`、
 `screenshots_7d`、`archives_100mb`、`git_repos`、`node_modules`、
 `downloads_today`。用 `EV_PRESETS_FILE` 添加自定义预设（见
-[§8.8](#88-自定义预设)）。
+[§9.8](#98-自定义预设)）。
 
-### 6.6 `everything_export`
+### 7.6 `everything_export`
 
 在 `EV_EXPORT_ROOT`（默认工作区）内写文件并返回路径。CSV 是带 BOM 的 UTF-8，Excel
 可直接打开；JSONL 每行一个对象；EFU 是 Everything 文件列表
@@ -552,7 +660,7 @@ Everything 的**自然排序**，不是码点序 —— 不要断言严格字典
 
 相对输出路径相对于 `EV_EXPORT_ROOT` 解析；该根之外的绝对路径会被拒绝。
 
-### 6.7 `everything_download`
+### 7.7 `everything_download`
 
 通过 Everything HTTP 服务器把已索引文件复制到 `EV_DOWNLOAD_ROOT`（默认工作区）。
 `dest` 可选；重名会自动加数字后缀。`max_bytes` 默认 2 GiB，超限会删除半成品。
@@ -570,7 +678,7 @@ Everything 的**自然排序**，不是码点序 —— 不要断言严格字典
 需要 `http_server_allow_file_download=1`。404 通常意味着文件已移动或索引尚未追上；
 重新 search 后再试。
 
-### 6.8 `everything_summary`
+### 7.8 `everything_summary`
 
 对命中结果分组，聚合数量与字节数。`group_by` 取 `ext`、`dir`、`type`、
 `size_bucket`、`month`、`parent` 之一。默认只聚合文件（目录大小为 0，会污染统计）；
@@ -603,7 +711,7 @@ Everything 的**自然排序**，不是码点序 —— 不要断言严格字典
 扫描受 `max_scan` 与 `EV_SCAN_CAP` 限制；`truncated_scan=true` 表示数字只是下限。
 `group_by=dir` 时 `dir_depth`（1–12）控制目录键深度；有 `path_scope` 时键相对于它。
 
-### 6.9 `everything_duplicates`
+### 7.9 `everything_duplicates`
 
 只读重复检测。模式：
 
@@ -636,7 +744,7 @@ Everything 的**自然排序**，不是码点序 —— 不要断言严格字典
 它**绝不删除或修改文件**。`dupe:` 会扫描整个索引，约 200ms —— 比普通查询慢得多，
 不要在紧凑循环里反复调用。
 
-### 6.10 `everything_grep`
+### 7.10 `everything_grep`
 
 用 ripgrep 做内容搜索。给出 `path_scope` 或 `query`；给 query 时，服务器会从候选文件
 的共同父目录推导最多 8 个搜索根。
@@ -667,7 +775,7 @@ Everything 的**自然排序**，不是码点序 —— 不要断言严格字典
 的路径与修复方法（`winget install BurntSushi.ripgrep.MSVC` 或设置 `EV_RG_EXE`）；
 其他工具不受影响。
 
-### 6.11 `everything_batch_stat`
+### 7.11 `everything_batch_stat`
 
 一次 stat 最多 200 个路径（1–200；超出会截断并告警，重复项自动去重）。支持文件、
 目录与不存在的路径；可选哈希是只读的，且有预算限制。
@@ -691,7 +799,7 @@ Everything 的**自然排序**，不是码点序 —— 不要断言严格字典
 }
 ```
 
-### 6.12 `everything_changes`
+### 7.12 `everything_changes`
 
 时间窗内变更的文件。`since` 接受 `today`、`24h`、`7d`、`30m`、`last7days` 或 ISO
 时间戳（如 `2026-10-17T08:00:00+08:00`）。
@@ -718,7 +826,7 @@ Everything 的**自然排序**，不是码点序 —— 不要断言严格字典
 始终把 `since` 换算成绝对 `dm:>=YYYY-MM-DD` 过滤，再在客户端套用精确时间窗。
 `total` 是日期级候选数，`count` 是精确窗口内的数量。
 
-### 6.13 `everything_reveal`
+### 7.13 `everything_reveal`
 
 唯一的副作用工具：在资源管理器中选中文件，或打开目录。它从不删除、移动、复制或
 重命名任何东西。`EV_ALLOW_SIDE_EFFECTS=0` 时不启动任何进程，返回
@@ -734,7 +842,7 @@ Everything 的**自然排序**，不是码点序 —— 不要断言严格字典
  "path": "D:\\work\\my-app\\README.md", "warnings": []}
 ```
 
-### 6.14 MCP 资源
+### 7.14 MCP 资源
 
 | URI | MIME 类型 | 内容 |
 |---|---|---|
@@ -744,13 +852,13 @@ Everything 的**自然排序**，不是码点序 —— 不要断言严格字典
 
 资源读取失败会返回说明性内容，不会影响工具调用；工具始终可用。
 
-## 7. Everything 查询语法速查
+## 8. Everything 查询语法速查
 
 `query` 字符串几乎原样传给 Everything，因此 Everything 自己的语法都适用。下面是经过
 验证的 1.4.1 常用子集；带实测命中数的完整矩阵见
 [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md)。
 
-### 7.1 名称、路径与过滤
+### 8.1 名称、路径与过滤
 
 ```text
 report_2025*              文件名通配符
@@ -775,7 +883,7 @@ nopath:foo                忽略路径匹配
 过滤器，`filter=` 会被忽略。工具的 `path_scope` 参数会自动把 `path:"..."` 组合进
 查询。
 
-### 7.2 逻辑与引号
+### 8.2 逻辑与引号
 
 ```text
 blender ext:exe           空格 = AND
@@ -785,7 +893,7 @@ blender !everything.exe   ! = NOT
 
 **没有单词 `OR`** —— 写 `jpg | png`。含空格的短语只能用引号。
 
-### 7.3 size: —— KB 量化的坑
+### 8.3 size: —— KB 量化的坑
 
 带单位的 `size:` **不是字节精确**。Everything 先把 `kb`/`mb`/`gb` 换算成 KB 数 `U`，
 再用 `ceil(size / 1024)` 与 `U` 比较。实际效果：
@@ -804,7 +912,7 @@ blender !everything.exe   ! = NOT
 需要精确字节阈值时用无单位数值或区间：`size:>104857600`、
 `size:1047553..1048576`。
 
-### 7.4 日期
+### 8.4 日期
 
 ```text
 dm:today
@@ -819,7 +927,7 @@ dm:2026-10
 `attrib:` 语法上可用，但默认未建索引，可能耗时**超过 5 秒**；先启用对应索引开关并
 重建索引，否则直接别用。
 
-### 7.5 仅 Everything 1.5 支持的前缀
+### 8.5 仅 Everything 1.5 支持的前缀
 
 这些在 1.4 返回空，本项目任何地方都不推荐：
 
@@ -830,7 +938,7 @@ distinct:    sort:    run_count:    date_run:
 未知的 `XYZ:` 前缀会被当成字面文本，而不是报错，所以用了不支持函数的查询会安静地
 返回 0。如果某个查询返回 0 但语法“应该”可用，去 `everything_help` 查一下前缀。
 
-### 7.6 其他值得知道的规则
+### 8.6 其他值得知道的规则
 
 - `sort` 是 HTTP 参数，不是查询语法；只有 `name`、`path`、`size`、`date_modified`
   真正生效，未知值静默回退 name。
@@ -841,12 +949,12 @@ distinct:    sort:    run_count:    date_run:
 - 优先用 Everything 原生语法而不是正则：更快、更清晰。不要把 `regex=true` 与
   `ext:`/`path:` 等函数混用。
 
-## 8. 常见任务配方
+## 9. 常见任务配方
 
 这些任务面向的完整版本（含 Agent prompt 示例与预期输出形状）见
 [`docs/USAGE.zh-CN.md`](docs/USAGE.zh-CN.md)。
 
-### 8.1 先搜索再过滤
+### 9.1 先搜索再过滤
 
 *“找出今年修改过、位于 Downloads 下的大安装包。”*
 
@@ -861,7 +969,7 @@ distinct:    sort:    run_count:    date_run:
 }
 ```
 
-### 8.2 用 ripgrep 搜内容
+### 9.2 用 ripgrep 搜内容
 
 *“找出所有硬编码 API 地址的地方。”*
 
@@ -875,7 +983,7 @@ distinct:    sort:    run_count:    date_run:
 }
 ```
 
-### 8.3 重复文件检测
+### 9.3 重复文件检测
 
 *“这个照片库里有重复文件吗？”*
 
@@ -885,7 +993,7 @@ distinct:    sort:    run_count:    date_run:
 
 需要确定性时升级到 `{"mode": "hash", "hash_algo": "sha256", "max_hash_bytes": 536870912}`。
 
-### 8.4 最近变更
+### 9.4 最近变更
 
 *“我今天动过哪些文件？”*
 
@@ -899,7 +1007,7 @@ distinct:    sort:    run_count:    date_run:
 {"since": "today", "path_scope": "D:\\work\\my-app", "max_results": 50}
 ```
 
-### 8.5 大文件审计
+### 9.5 大文件审计
 
 *“磁盘空间去哪了？”* 两次调用：先按扩展名聚合，再列出最大文件。
 
@@ -912,7 +1020,7 @@ distinct:    sort:    run_count:    date_run:
  "fields": ["name", "path", "size"]}
 ```
 
-### 8.6 按扩展名或目录聚类
+### 9.6 按扩展名或目录聚类
 
 ```json
 {"group_by": "ext", "path_scope": "D:\\work\\my-app", "top_n": 20}
@@ -924,7 +1032,7 @@ distinct:    sort:    run_count:    date_run:
 
 `group_by=size_bucket` 给出直方图，`month` 按修改月份分组，`parent` 按直接父目录分组。
 
-### 8.7 导出 CSV
+### 9.7 导出 CSV
 
 *“把所有超过 10MB 的日志给我，做成表格。”*
 
@@ -942,7 +1050,7 @@ distinct:    sort:    run_count:    date_run:
 文件落在 `EV_EXPORT_ROOT` 下；`rows`、`bytes`、`truncated` 告诉你是否需要再用
 `offset` 导下一段。
 
-### 8.8 自定义预设
+### 9.8 自定义预设
 
 把 `EV_PRESETS_FILE` 指向一个 JSON 文件（模板见
 [`examples/presets.json`](examples/presets.json)）：
@@ -968,7 +1076,7 @@ distinct:    sort:    run_count:    date_run:
 占位符 `{downloads}`、`{userprofile}`、`{workspace}` 在运行时展开。JSON 只用标准库；
 YAML 需要 PyYAML。
 
-### 8.9 下载文件
+### 9.9 下载文件
 
 ```json
 {"path": "D:\\work\\builds\\release.zip", "dest": "artifacts/release.zip", "max_bytes": 104857600}
@@ -976,108 +1084,6 @@ YAML 需要 PyYAML。
 
 目标解析到 `EV_DOWNLOAD_ROOT` 下；文件超过 `max_bytes` 或目标越出根目录时会干净地
 失败。这是通过回环 HTTP 复制字节 —— 不是搜索操作。
-
-## 9. 基准测试
-
-![C:\Program Files 上的查询延迟](benchmarks/charts/latency_programfiles.png)
-
-![相对原生递归扫描的加速比](benchmarks/charts/speedup.png)
-
-![随语料规模扩展](benchmarks/charts/scaling.png)
-
-测量时间 2026-10-18，环境 Windows 10 Pro（AMD Ryzen 7 5800H，16 GB 内存）、Everything 1.4.1.1024（3,243,750 条索引）、Python 3.11.7。原生基线：预热的 PowerShell 7.6.6，单个 `-NoProfile` 进程；MCP：工具背后同一函数的进程内调用。取 3 个样本的中位数（`C:\Program Files` 取 2 个），丢弃一次预热；加速比按“原生扫描 ÷ MCP 调用”计算。本次运行使用 `EV_SCAN_CAP=600000`，总耗时 517 秒。
-
-**C:\Windows\System32** —— 17,616 个文件，25,531 条索引
-
-| 场景 | 原生扫描（ms） | MCP（ms） | 加速比 | 命中数一致 |
-|---|---:|---:|---:|:---:|
-| 名称通配符 | 510 | 1.0 | 519× | no |
-| 名称正则 | 812 | 65.7 | 12.4× | yes |
-| 类型 + 大小 + 日期过滤 | 796 | 0.8 | 1,034× | no |
-| 按扩展名统计字节 | 760 | 346 | 2.2× | no |
-| 最大的 N 个文件 | 774 | 0.9 | 885× | yes |
-| ≥100MB 文件 | 693 | 1.3 | 514× | no |
-| 最近 7 天变更 | 669 | 0.9 | 780× | no |
-
-**C:\Program Files** —— 427,637 个文件，554,843 条索引
-
-| 场景 | 原生扫描（ms） | MCP（ms） | 加速比 | 命中数一致 |
-|---|---:|---:|---:|:---:|
-| 名称通配符 | 14,465 | 0.9 | 15,504× | no |
-| 类型 + 大小 + 日期过滤 | 20,805 | 12.8 | 1,626× | no |
-| 按扩展名统计字节 | 22,804 | 7,959 | 2.9× | no |
-| 最大的 N 个文件 | 27,435 | 8.7 | 3,154× | yes |
-| ≥100MB 文件 | 21,336 | 17.9 | 1,189× | no |
-
-**合成语料（30k 文件 / 200 目录）** —— 30,000 个文件，30,201 条索引
-
-| 场景 | 原生扫描（ms） | MCP（ms） | 加速比 | 命中数一致 |
-|---|---:|---:|---:|:---:|
-| 名称通配符 | 179 | 1.1 | 162× | yes |
-| 名称正则 | 797 | 72.3 | 11.0× | yes |
-| 类型 + 大小 + 日期过滤 | 438 | 1.0 | 453× | yes |
-| 按扩展名统计字节 | 554 | 526 | 1.1× | yes |
-| 最大的 N 个文件 | 724 | 0.9 | 792× | yes |
-| ≥100MB 文件 | 412 | 16.1 | 25.6× | yes |
-| 重复文件组 | 549 | 560 | 1.0× | yes |
-| 最近 7 天变更 | 440 | 15.9 | 27.7× | no |
-| 内容 grep | 21,001 | 1,354 | 15.5× | yes |
-| 单个小目录 | 3.0 | 0.7 | 4.1× | yes |
-
-MCP 侧是进程内调用，因此这些计时不含 JSON-RPC 传输：独立的端到端 MCP stdio 往返测量的中位数为 5.74 ms —— 需要整次调用延迟时请加上它。分组聚合与重复检测是 MCP 侧最弱的场景（约 1–3 倍），因为它们要通过 HTTP 每次 1000 行地分页扫描索引。200 文件的小目录在绝对时间上接近持平：3.0ms 对 0.7ms。
-
-**为什么计数不同。** 标记为 `no` 的行是合理差异而非错误：（a）受 ACL 保护的子树（如 `C:\Windows\System32\config\systemprofile` 与 `C:\Program Files\WindowsApps`）会被 Everything 索引，但普通用户权限的递归扫描无法枚举—— 这是最大的差异，方向是*索引计数更高*；（b）Windows 系统目录不断变化，部分索引条目会滞后于磁盘；（c）Everything 的 `dm:` 过滤是日期粒度，而原生基线使用精确的“当前时间 − 7×24h”窗口；（d）`size:` 单位是 KB 量化。计数仅作参考，不作为正确性判据 —— 真正重要的是查询语义与返回行。
-
-### 9.1 测试方法
-
-基准测试框架位于 [`benchmarks/`](benchmarks/)，可复现：`benchmarks/bench.py` 驱动
-两侧对比，`benchmarks/native_baseline.ps1` 是 PowerShell 基线，
-`benchmarks/gen_dataset.py` 生成合成语料。
-
-- **同一语料、同一查询、两侧对比。** 每个场景在完全相同的文件集与相同的路径范围上运行：
-  一次原生 PowerShell 递归扫描，与等价的 Everything 索引查询。
-- **原生基线是预热且地道的 PowerShell 7.6.6。** `Get-ChildItem`、`Where-Object` 与
-  `findstr` 在单个 `pwsh -NoProfile` 进程内运行，用 `[Diagnostics.Stopwatch]` 计时。
-  排除 shell 启动时间，丢弃一次预热，每个场景取 3 个样本的中位数（`C:\Program Files`
-  的 16–27 秒扫描取 2 个样本）。分组使用 O(n) 哈希表而不是 `Group-Object`，因为
-  PowerShell 5.1 的 `Group-Object` 在 3 万条数据上要 36 秒 —— 基线是地道的，而不是
-  被人为拖慢。这是扫描的*最好情况*。
-- **MCP 侧走同一代码路径、在进程内测量。** 每次测量都调用 MCP 工具背后的同一个函数，
-  查询与路径范围完全相同；另有独立的端到端 stdio 测量报告 JSON-RPC 开销（参考机器上
-  中位数 5.74ms）。
-- **校验正确性，而不是假设。** 每个场景都对比原生与 MCP 的命中数；合理的差异（返回上限、
-  索引范围、受 ACL 保护的子树、KB 量化的 `size:` 语法、日期粒度的 `dm:`）记录在
-  `count_match` / `count_note` 中并在上文解释，而不是隐藏。
-- **语料：** `C:\Windows\System32`（小，约 17.6k 文件）、`C:\Program Files`
-  （大，约 427.6k 文件），以及生成的合成目录树（30k 文件、200 个目录、已知扩展名/大小/
-  修改时间分布、约 350 个与重复检测相关的文件）。完整运行使用 `EV_SCAN_CAP=600000`，
-  以便聚合场景能覆盖整个 `C:\Program Files`；其余设置均为默认值。
-
-### 9.2 公平性说明 —— 引用数字前请先读
-
-> **一句话诚实总结：** 这些数字比较的是“查询预建索引”与“现场递归扫描”。它们衡量的
-> 是拥有索引带来的价值，而不是什么更快的魔法文件系统。范围很小或缓存已热时，差距会
-> 缩小到接近持平；语料很大且重复查询时，差距才显著。Everything 仅支持 Windows/NTFS；
-> `everything_grep` 的速度来自 ripgrep 加很小的候选集，而不是索引本身。
-
-- **索引是预建并持续维护的。** Everything 的优势来自它已经遍历过文件系统一次，并通过
-  USN journal 跟踪变化。基准测试比较的是“查询这份索引”与“现场扫描”，并没有比较
-  “建索引成本”与“扫描成本”。索引的构建与维护成本仍然要有人承担。
-- **冷缓存与极小范围会抹平优势。** 如果目标目录的元数据已经在内存中，原生扫描可能只要
-  几毫秒；此时 MCP 往返加 HTTP 查询可能持平甚至更慢。加速比随语料规模与重复查询次数
-  增长。
-- **仅 Windows 与 NTFS。** Everything 无法索引 Linux 文件系统、网络共享（默认）、
-  FAT/exFAT 卷，或你没加入索引的卷。这里没有可移植的等价物。
-- **内容搜索是 ripgrep，不是 Everything。** `everything_grep` 的速度取决于候选目录树、
-  文件大小、忽略规则与 pattern —— 与 Everything 索引无关。但它仍远快于全盘 grep，
-  因为候选集很小。
-- **聚合与重复检测是 MCP 侧最弱的场景。** `everything_summary` 与
-  `everything_duplicates` 通过 HTTP 每页 1000 行分页扫描索引，因此加速比大约只有
-  1–3 倍，而不是单次过滤查询那种三位数。它们有界且可预测，但不是索引最擅长的场景。
-- **索引的内存与磁盘是真实成本。** Everything 把索引常驻内存并落盘（数百万条目的机器
-  上是数百 MB）。基准数字不包含这部分开销。
-- **除单独报告的 stdio 往返测量外，每次操作的计时不含工具调用开销**。Agent 每次调用
-  都要付这份开销。
 
 ## 10. 架构
 
@@ -1171,7 +1177,7 @@ Everything。组合工具通过 `client.search` 分页并在本地后处理；`e
   全量重建索引。
 - **1.4 没有小时级相对日期。** `everything_changes` 归一化为日期级 `dm:` 再在客户端
   精确过滤；`total` 是日期级候选数。
-- **带单位的 `size:` 是 KB 量化**，不是字节精确（见 §7.3）。
+- **带单位的 `size:` 是 KB 量化**，不是字节精确（见 §8.3）。
 - **内容搜索依赖 ripgrep** 已安装或随附。缺失时 `everything_grep` 会带说明失败，其余
   12 个工具不受影响。
 - **`everything_duplicates(mode=name)` 使用 `dupe:`**，会扫描整个索引（320 万条目机器

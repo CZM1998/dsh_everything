@@ -140,7 +140,7 @@
 ```
 
 **说明：** `size:` 带 `kb/mb/gb` 时是 KB 量化 —— 见
-[README §7](../README.zh-CN.md#7-everything-查询语法速查)。精确阈值请用字节：
+[README §8](../README.zh-CN.md#8-everything-查询语法速查)。精确阈值请用字节：
 `size:>10485760`。`dm:` 是修改时间；`dc:` 与 `da:` 默认未建索引，非常慢。
 
 ### 4. 存在性判断与计数
@@ -451,7 +451,7 @@ UTF-8（Excel 友好）。`jsonl` 每行一个 JSON 对象；`efu` 是 Everythin
 ```
 
 **说明：** 服务器自带 8 个内置预设；用 `EV_PRESETS_FILE` 添加自己的（见
-[README §8.8](../README.zh-CN.md#88-自定义预设)）。预设支持 `{downloads}`、
+[README §9.8](../README.zh-CN.md#98-自定义预设)）。预设支持 `{downloads}`、
 `{userprofile}`、`{workspace}` 占位符。
 
 ### 15. 批量元数据与哈希
@@ -554,7 +554,7 @@ UTF-8（Excel 友好）。`jsonl` 每行一个 JSON 对象；`efu` 是 Everythin
 3. 在 `everything_help` 核对前缀：`distinct:`、`sort:`、`run_count:`、`date_run:` 是
    1.5 特性，在 1.4 返回 0。`ext:a,b` 与 `ext:py*` 同样返回 0 —— 用分号与精确扩展名。
 4. 如果是 `size:` 查询，记得 KB 量化
-   （[README §7.3](../README.zh-CN.md#73-size--kb-量化的坑)）。
+   （[README §8.3](../README.zh-CN.md#83-size--kb-量化的坑)）。
 
 ### C. `everything_grep` 找不到 ripgrep
 

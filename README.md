@@ -30,14 +30,14 @@ official `mcp` SDK · **loopback-only**, **read-only by default**.
 ## Table of contents
 
 1. [Why this exists](#1-why-this-exists)
-2. [Features](#2-features)
-3. [Requirements](#3-requirements)
-4. [Install](#4-install)
-5. [Quick start](#5-quick-start)
-6. [Tool reference](#6-tool-reference)
-7. [Everything query syntax cheat sheet](#7-everything-query-syntax-cheat-sheet)
-8. [Recipes](#8-recipes)
-9. [Benchmarks](#9-benchmarks)
+2. [Benchmarks](#2-benchmarks)
+3. [Features](#3-features)
+4. [Requirements](#4-requirements)
+5. [Install](#5-install)
+6. [Quick start](#6-quick-start)
+7. [Tool reference](#7-tool-reference)
+8. [Everything query syntax cheat sheet](#8-everything-query-syntax-cheat-sheet)
+9. [Recipes](#9-recipes)
 10. [Architecture](#10-architecture)
 11. [Security and privacy](#11-security-and-privacy)
 12. [Limitations](#12-limitations)
@@ -83,7 +83,135 @@ Concrete agent tasks this unlocks:
 The server does not replace `read`/`edit`/shell tools. It replaces the *search*
 step in front of them, which is usually the slow part.
 
-## 2. Features
+The next section quantifies that difference on three real corpora — including the
+cases where the index does **not** win.
+
+## 2. Benchmarks
+
+> **TL;DR** — on `C:\Program Files` (427,637 files), finding every `*.dll` takes
+> **0.9 ms** through the index versus **14.5 s** for a warm recursive scan:
+> **15,504× faster**. Read the fairness caveats at the end of this section before
+> quoting any number.
+
+![Query latency on C:\Program Files](benchmarks/charts/latency_programfiles.png)
+
+![Speedup over the native recursive scan](benchmarks/charts/speedup.png)
+
+![Scaling with corpus size](benchmarks/charts/scaling.png)
+
+Measured 2026-10-18 on Windows 10 Pro (AMD Ryzen 7 5800H, 16 GB RAM), Everything 1.4.1.1024 with 3,243,750 index entries, Python 3.11.7. Native baseline: warm PowerShell 7.6.6 in one `-NoProfile` process; MCP: in-process call to the function behind each tool. Median of 3 samples (2 for `C:\Program Files`), one warm-up discarded; speedup = native scan ÷ MCP call. The run used `EV_SCAN_CAP=600000`; total runtime was 517 s.
+
+**C:\Windows\System32** — 17,616 files, 25,531 index entries
+
+| Scenario | Native scan (ms) | MCP (ms) | Speedup | Counts match |
+|---|---:|---:|---:|:---:|
+| Name glob | 510 | 1.0 | 519× | no |
+| Name regex | 812 | 65.7 | 12.4× | yes |
+| Type + size + date filter | 796 | 0.8 | 1,034× | no |
+| Bytes by extension | 760 | 346 | 2.2× | no |
+| Top-N largest | 774 | 0.9 | 885× | yes |
+| Files >= 100 MB | 693 | 1.3 | 514× | no |
+| Changed in last 7 days | 669 | 0.9 | 780× | no |
+
+**C:\Program Files** — 427,637 files, 554,843 index entries
+
+| Scenario | Native scan (ms) | MCP (ms) | Speedup | Counts match |
+|---|---:|---:|---:|:---:|
+| Name glob | 14,465 | 0.9 | 15,504× | no |
+| Type + size + date filter | 20,805 | 12.8 | 1,626× | no |
+| Bytes by extension | 22,804 | 7,959 | 2.9× | no |
+| Top-N largest | 27,435 | 8.7 | 3,154× | yes |
+| Files >= 100 MB | 21,336 | 17.9 | 1,189× | no |
+
+**synthetic corpus (30k files / 200 dirs)** — 30,000 files, 30,201 index entries
+
+| Scenario | Native scan (ms) | MCP (ms) | Speedup | Counts match |
+|---|---:|---:|---:|:---:|
+| Name glob | 179 | 1.1 | 162× | yes |
+| Name regex | 797 | 72.3 | 11.0× | yes |
+| Type + size + date filter | 438 | 1.0 | 453× | yes |
+| Bytes by extension | 554 | 526 | 1.1× | yes |
+| Top-N largest | 724 | 0.9 | 792× | yes |
+| Files >= 100 MB | 412 | 16.1 | 25.6× | yes |
+| Duplicate groups | 549 | 560 | 1.0× | yes |
+| Changed in last 7 days | 440 | 15.9 | 27.7× | no |
+| Content grep | 21,001 | 1,354 | 15.5× | yes |
+| Single small directory | 3.0 | 0.7 | 4.1× | yes |
+
+The MCP side was measured as an in-process call, so these timings exclude JSON-RPC transport: a separate end-to-end MCP stdio round-trip measured 5.74 ms median — add that for whole-call latency. Grouping and duplicate detection are the weak spot for the MCP side (about 1–3×) because they paginate the index over HTTP 1000 rows at a time. The 200-file directory case is near-parity in absolute terms: 3.0 ms versus 0.7 ms.
+
+**Why counts differ.** Rows marked `no` are legitimate differences, not errors: (a) ACL-protected subtrees such as `C:\Windows\System32\config\systemprofile` and `C:\Program Files\WindowsApps` are indexed by Everything but cannot be enumerated by a normal-user recursive scan — this is the largest difference and it makes the *index* counts higher; (b) Windows system directories churn, so some index entries lag the disk; (c) Everything's `dm:` filter is day-granular while the native baseline used an exact now-7×24h window; (d) `size:` units are KB-quantized. Counts are presented as information, not as a correctness gate — the query semantics and returned rows are what matter.
+
+### 2.1 Methodology
+
+The benchmark harness lives in [`benchmarks/`](benchmarks/) and is reproducible:
+`benchmarks/bench.py` drives both sides, `benchmarks/native_baseline.ps1` contains
+the PowerShell baseline, and `benchmarks/gen_dataset.py` generates the synthetic
+corpus.
+
+- **Same corpus, same query, both sides.** Each scenario runs against an identical
+  file set: a native PowerShell recursive scan and the equivalent Everything index
+  query, with the same path scope.
+- **Native baseline is warm, idiomatic PowerShell 7.6.6.** `Get-ChildItem`,
+  `Where-Object` and `findstr` run inside one `pwsh -NoProfile` process timed with
+  `[Diagnostics.Stopwatch]`. Shell startup is excluded, one warm-up pass is
+  discarded, and each scenario reports the median of 3 samples (2 samples for the
+  16–27-second `C:\Program Files` pass). Grouping uses an O(n) hashtable rather
+  than `Group-Object`, because PowerShell 5.1's `Group-Object` took 36 s on 30k
+  items — the baseline is idiomatic, not artificially slow. This is the *best case*
+  for a scan.
+- **The MCP side is the same code path, in-process.** Each measurement calls the
+  exact function behind the MCP tool with the same query and the same path scope; a
+  separate end-to-end stdio measurement reports JSON-RPC overhead (5.74 ms median on
+  the reference machine).
+- **Correctness is checked, not assumed.** Native and MCP hit counts are compared
+  per scenario; legitimate mismatches (result caps, index scope, ACL-protected
+  subtrees, KB-quantized `size:` syntax, day-granular `dm:`) are recorded in
+  `count_match` / `count_note` and explained above rather than hidden.
+- **Corpora:** `C:\Windows\System32` (small, ~17.6k files), `C:\Program Files`
+  (large, ~427.6k files), and a generated synthetic tree (30k files, 200
+  directories, known extension/size/mtime distribution, ~350 duplicate-related
+  files). The complete run used `EV_SCAN_CAP=600000` so aggregation scenarios could
+  cover all of `C:\Program Files`; every other setting was default.
+
+### 2.2 Fairness caveats — read this before quoting a number
+
+> **Honest summary:** these numbers compare a *prebuilt index query* with a *live
+> recursive scan*. They measure the value of having an index, not a magic faster
+> filesystem. On small or already-cached scopes the gap shrinks to near parity;
+> on large corpora and repeated queries it is large. Everything is Windows/NTFS
+> only, and `everything_grep` speed comes from ripgrep plus a small candidate set,
+> not from the index.
+
+- **The index is prebuilt and maintained.** Everything's advantage comes from
+  having already walked the filesystem once and tracking changes via the USN
+  journal. The benchmark compares a query against that index with a live scan; it
+  does not compare indexing cost with scan cost. Someone still pays to build and
+  maintain the index.
+- **Cold caches and tiny scopes erase the advantage.** On a small directory whose
+  metadata is already in RAM, a native scan can finish in a few milliseconds; the
+  MCP round trip plus HTTP query may be comparable or slower. The speedup grows
+  with corpus size and with repeated queries.
+- **Windows and NTFS only.** Everything cannot index Linux filesystems, network
+  shares (by default), FAT/exFAT volumes, or files outside the volumes you add to
+  it. There is no portable equivalent here.
+- **Content search is ripgrep, not Everything.** `everything_grep` speed depends on
+  the candidate tree, file sizes, ignore rules and the pattern — not on the
+  Everything index. It is still far faster than grepping a whole disk because the
+  candidate set is small.
+- **Aggregation and duplicate detection are the weakest case for the MCP side.**
+  `everything_summary` and `everything_duplicates` page through the index 1000 rows
+  per HTTP request, so their speedup is roughly 1–3× rather than the three-digit
+  numbers of a single filtered query. They are bounded and predictable, but they are
+  not where the index shines.
+- **Index memory and disk are real costs.** Everything keeps the index in memory
+  and on disk (hundreds of MB on a multi-million-entry machine). The benchmark
+  numbers do not include that footprint.
+- **Tool-call overhead is excluded from per-operation timings** except in the
+  explicitly reported stdio round-trip measurement. An agent pays that overhead on
+  every call.
+
+## 3. Features
 
 - **13 tools** designed for agents, not humans:
   - **7 query tools** — `everything_search`, `everything_count`,
@@ -121,21 +249,21 @@ step in front of them, which is usually the slow part.
 - **Works with any MCP client.** DSH is the primary target (`mcp__everything__*`
   tool names), but the transport is plain MCP stdio.
 
-## 3. Requirements
+## 4. Requirements
 
 | Requirement | Details |
 |---|---|
 | OS | Windows 10 or 11, on an **NTFS** volume. Everything indexes NTFS; FAT/exFAT and network shares are not indexed unless you explicitly add them. |
 | Everything | [voidtools Everything](https://www.voidtools.com/) **1.4.1 or newer**, installed and running. Verified against **1.4.1.1024**; 1.5 is expected to work but the capability matrix has not been re-verified on it. |
-| Everything HTTP server | Enabled and bound to **`127.0.0.1:8090`** (see [Install](#4-install)). |
+| Everything HTTP server | Enabled and bound to **`127.0.0.1:8090`** (see [Install](#5-install)). |
 | Python | **3.10+** (tested on 3.11.7), with the official `mcp` SDK **≥ 1.2.0**. |
 | MCP client | DSH (DeepSeek Harness) recommended; any MCP stdio client works. |
 | ripgrep | Optional, only for `everything_grep`. Auto-detected; see [Troubleshooting](#13-troubleshooting) if it is not found. |
 | Privileges | None. No admin rights, no service changes, no files written outside the configured roots. |
 
-## 4. Install
+## 5. Install
 
-### 4.1 Enable the Everything HTTP server
+### 5.1 Enable the Everything HTTP server
 
 The server talks to Everything's built-in HTTP JSON API. It is **disabled by
 default**, and Everything's HTTP interface has **no authentication**, so it must
@@ -194,7 +322,7 @@ three HTTP keys (`enabled`, `port`, `bindings`) and restart Everything. It does
 
 </details>
 
-### 4.2 Clone and install
+### 5.2 Clone and install
 
 Recommended — editable install. This installs the `mcp` dependency and a
 `dsh-everything-mcp` console script:
@@ -228,7 +356,7 @@ against the HTTP endpoint and logs the result to **stderr** (stdout is reserved 
 the MCP protocol). A failed self-check does not kill the process — the first tool
 call retries and returns actionable guidance.
 
-### 4.3 Register with DSH
+### 5.3 Register with DSH
 
 DSH mounts MCP servers through `@deepseek-ai/dsh-mcp-client`. Add an entry to the
 target profile's patch file:
@@ -279,7 +407,7 @@ Notes:
   `EV_*` variables pass through untouched.
 - Other MCP clients: use [`examples/mcp.json`](examples/mcp.json) instead.
 
-### 4.4 Restart `dsh web`
+### 5.4 Restart `dsh web`
 
 Profile changes are applied at startup. Restart `dsh web` after editing the patch.
 
@@ -290,7 +418,7 @@ Profile changes are applied at startup. Restart `dsh web` after editing the patc
 > Restarting `dsh web` clears it. Editing the profile and restarting is the
 > supported path.
 
-### 4.5 Verify
+### 5.5 Verify
 
 Ask the agent to call `mcp__everything__everything_status`, then
 `mcp__everything__everything_search`:
@@ -303,7 +431,7 @@ Ask the agent to call `mcp__everything__everything_status`, then
 count and the HTTP endpoint state. If it reports a problem, follow its `hints`
 array or the [Troubleshooting](#13-troubleshooting) table.
 
-### 4.6 Environment variables
+### 5.6 Environment variables
 
 All configuration is through environment variables. Every one has a working
 default; you only need the ones you want to change.
@@ -329,12 +457,12 @@ default; you only need the ones you want to change.
 | `EV_LOG_LEVEL` | `INFO` | Log level; logs go to stderr only. |
 | `EV_SKIP_SELF_CHECK` | empty | Set to `1` to skip the startup HTTP self-check. |
 
-## 5. Quick start
+## 6. Quick start
 
 Five calls that cover most agent needs. "Intent" is what the user says; the JSON
 is the exact tool argument object.
 
-### 5.1 Find a file
+### 6.1 Find a file
 
 *"Find the Q3 budget spreadsheet, newest first."*
 
@@ -351,7 +479,7 @@ is the exact tool argument object.
 Returns the newest matching workbooks with full paths. Quotes force an exact
 phrase; without them the two words are an AND search.
 
-### 5.2 Count by extension
+### 6.2 Count by extension
 
 *"How many Python files are in this project?"*
 
@@ -361,7 +489,7 @@ phrase; without them the two words are an AND search.
 
 Returns `{"total": 1284, ...}` and no file list — the cheapest existence check.
 
-### 5.3 Search file contents
+### 6.3 Search file contents
 
 *"Where is TODO mentioned in the backend?"*
 
@@ -377,7 +505,7 @@ Returns `{"total": 1284, ...}` and no file list — the cheapest existence check
 Returns `matches[]` with `path`, `line`, `column` and `text`, plus ripgrep stats.
 This is ripgrep over the candidate tree, not an Everything index lookup.
 
-### 5.4 Top-N largest files
+### 6.4 Top-N largest files
 
 *"What are the ten biggest ISO images on this machine?"*
 
@@ -392,9 +520,9 @@ This is ripgrep over the candidate tree, not an Everything index lookup.
 ```
 
 `sort=size` with `ascending=false` puts the largest first. Use raw byte values
-(no unit suffix) if you need exact thresholds — see §7.
+(no unit suffix) if you need exact thresholds — see §8.
 
-### 5.5 Recent changes
+### 6.5 Recent changes
 
 *"What changed in my project this week?"*
 
@@ -403,9 +531,9 @@ This is ripgrep over the candidate tree, not an Everything index lookup.
 ```
 
 Returns files modified in the window, newest first, with a `window` object that
-documents the exact time bounds. See §6.12 for the date-granularity caveat.
+documents the exact time bounds. See §7.12 for the date-granularity caveat.
 
-## 6. Tool reference
+## 7. Tool reference
 
 All tools return JSON objects. Errors are raised as MCP tool errors with a
 human-readable, actionable message. In DSH, prefix every name with
@@ -427,7 +555,7 @@ human-readable, actionable message. In DSH, prefix every name with
 | 12 | `everything_changes` | composite | List files changed in a time window | `since`, `path_scope`, `exts`, `max_results`, `sort`, `ascending` | `items[]`, `window`, `count`, `total`, `warnings[]` |
 | 13 | `everything_reveal` | composite | Show/open a path in File Explorer (only side-effect tool) | `path` | `ok`, `opened`, `mode` |
 
-### 6.1 `everything_search`
+### 7.1 `everything_search`
 
 Everything-native search with pagination and projection. `regex=true` switches the
 query to a regular expression; `path_scope` is composed into the Everything query
@@ -477,7 +605,7 @@ anything else produces a warning and falls back to name ascending. Name order is
 Everything's **natural sort**, not code-point order — do not assert strict
 lexicographic order.
 
-### 6.2 `everything_count`
+### 7.2 `everything_count`
 
 The cheapest question: does it exist, and how many are there?
 
@@ -490,7 +618,7 @@ The cheapest question: does it exist, and how many are there?
  "total": 1284, "elapsed_ms": 11.4, "channel": "http", "warnings": []}
 ```
 
-### 6.3 `everything_status`
+### 7.3 `everything_status`
 
 No arguments. Use it first when anything looks wrong.
 
@@ -526,7 +654,7 @@ Trimmed response (paths shown with placeholders):
 `hints[]` contains actionable advice (for example, which ini switches are disabled
 and why `dc:`/`da:`/`attrib:` queries are slow).
 
-### 6.4 `everything_help`
+### 7.4 `everything_help`
 
 No arguments. The self-explaining entry point: supported syntax, unsupported
 syntax, slow queries, HTTP parameter matrix, all 13 tools, example calls and tips.
@@ -534,7 +662,7 @@ The same content is available as a markdown string in the `markdown` field and a
 the `everything://help/syntax` resource. Call it before guessing whether a query
 prefix works.
 
-### 6.5 `everything_presets`
+### 7.5 `everything_presets`
 
 ```json
 {"action": "list"}
@@ -562,9 +690,9 @@ Run one, optionally overriding paging and scope:
 Built-ins: `recent_modified_7d`, `today_changed`, `large_files_100mb`,
 `screenshots_7d`, `archives_100mb`, `git_repos`, `node_modules`,
 `downloads_today`. Add your own with `EV_PRESETS_FILE` (see
-[§8.8](#88-custom-presets)).
+[§9.8](#98-custom-presets)).
 
-### 6.6 `everything_export`
+### 7.6 `everything_export`
 
 Writes a file inside `EV_EXPORT_ROOT` (default: workspace) and returns its path.
 CSV is UTF-8 with a BOM so Excel opens it correctly; JSONL is one object per line;
@@ -591,7 +719,7 @@ Default 5000 rows, hard cap 10000; use `offset` to export in slices.
 Relative output paths resolve against `EV_EXPORT_ROOT`; absolute paths outside it
 are rejected.
 
-### 6.7 `everything_download`
+### 7.7 `everything_download`
 
 Copies an indexed file to `EV_DOWNLOAD_ROOT` (default: workspace) using the
 Everything HTTP server. `dest` is optional; a name collision gets a numeric
@@ -611,7 +739,7 @@ exceeded.
 Requires `http_server_allow_file_download=1`. A 404 usually means the file moved
 or the index has not caught up; search again and retry.
 
-### 6.8 `everything_summary`
+### 7.8 `everything_summary`
 
 Groups matches and aggregates count and bytes. `group_by` is one of `ext`, `dir`,
 `type`, `size_bucket`, `month`, `parent`. By default only files are aggregated
@@ -646,7 +774,7 @@ Scans are capped by `max_scan` and `EV_SCAN_CAP`; `truncated_scan=true` means th
 numbers are a lower bound. With `group_by=dir`, `dir_depth` (1–12) controls the
 directory key depth; with a `path_scope` the keys are relative to it.
 
-### 6.9 `everything_duplicates`
+### 7.9 `everything_duplicates`
 
 Read-only duplicate detection. Modes:
 
@@ -680,7 +808,7 @@ budget (`max_response_bytes`, `0` disables). It never deletes or modifies files.
 `dupe:` scans the whole index and takes ~200 ms — far slower than a normal query,
 so avoid calling it in tight loops.
 
-### 6.10 `everything_grep`
+### 7.10 `everything_grep`
 
 Content search with ripgrep. Give either `path_scope` or a `query`; with a query,
 the server derives up to 8 search roots from the common parent directories of the
@@ -712,7 +840,7 @@ candidate files.
 an error listing the paths it probed and how to fix it (`winget install
 BurntSushi.ripgrep.MSVC` or set `EV_RG_EXE`); other tools keep working.
 
-### 6.11 `everything_batch_stat`
+### 7.11 `everything_batch_stat`
 
 Stats up to 200 paths in one call (1–200; extras are truncated with a warning,
 duplicates de-duplicated). Works for files, directories and missing paths; optional
@@ -737,7 +865,7 @@ hashing is read-only and budgeted.
 }
 ```
 
-### 6.12 `everything_changes`
+### 7.12 `everything_changes`
 
 Files changed inside a window. `since` accepts `today`, `24h`, `7d`, `30m`,
 `last7days`, or an ISO timestamp (e.g. `2026-10-17T08:00:00+08:00`).
@@ -765,7 +893,7 @@ syntax (it returns 0). The server always converts `since` into an absolute
 `dm:>=YYYY-MM-DD` filter and then applies the exact time window client-side.
 `total` is the date-level candidate count; `count` is the exact in-window count.
 
-### 6.13 `everything_reveal`
+### 7.13 `everything_reveal`
 
 The only side-effect tool: opens File Explorer with the file selected, or opens a
 directory. It never deletes, moves, copies or renames anything. With
@@ -782,7 +910,7 @@ re-read on every call, so no restart is needed to toggle it.
  "path": "D:\\work\\my-app\\README.md", "warnings": []}
 ```
 
-### 6.14 MCP resources
+### 7.14 MCP resources
 
 | URI | MIME type | Content |
 |---|---|---|
@@ -793,14 +921,14 @@ re-read on every call, so no restart is needed to toggle it.
 Resource read failures return an explanatory payload instead of breaking tool
 calls; the tools remain available.
 
-## 7. Everything query syntax cheat sheet
+## 8. Everything query syntax cheat sheet
 
 The `query` string is passed to Everything almost verbatim, so Everything's own
 syntax applies. This is the verified 1.4.1 subset that matters most; the full
 matrix with measured hit counts is in
 [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md).
 
-### 7.1 Names, paths and filters
+### 8.1 Names, paths and filters
 
 ```text
 report_2025*              wildcard in the file name
@@ -826,7 +954,7 @@ Path filtering only works **inside the search string**: the HTTP API's `path=`
 parameter is a boolean match-path switch, not a filter, and `filter=` is ignored.
 The `path_scope` tool argument composes `path:"..."` into the query for you.
 
-### 7.2 Boolean logic and quoting
+### 8.2 Boolean logic and quoting
 
 ```text
 blender ext:exe           space = AND
@@ -837,7 +965,7 @@ blender !everything.exe   ! = NOT
 There is **no word `OR`** — write `jpg | png`. Quotes are the only way to search
 for a phrase containing spaces.
 
-### 7.3 Size — the KB-quantization trap
+### 8.3 Size — the KB-quantization trap
 
 `size:` with a unit is **not byte-exact**. Everything converts `kb`/`mb`/`gb` to a
 KB count `U` and compares `ceil(size / 1024)` against it. In practice:
@@ -856,7 +984,7 @@ KB count `U` and compares `ceil(size / 1024)` against it. In practice:
 For exact byte thresholds use a unitless value or a range:
 `size:>104857600`, `size:1047553..1048576`.
 
-### 7.4 Dates
+### 8.4 Dates
 
 ```text
 dm:today
@@ -872,7 +1000,7 @@ range. `dc:` (created), `da:` (accessed) and `attrib:` work syntactically but ar
 not indexed by default and can take **more than 5 seconds**; enable the matching
 index switches and rebuild the index first, or just don't use them.
 
-### 7.5 Everything 1.5-only prefixes
+### 8.5 Everything 1.5-only prefixes
 
 These return nothing on 1.4 and are not recommended anywhere in this project:
 
@@ -884,7 +1012,7 @@ An unknown `XYZ:` prefix is treated as literal text, not as an error, so a query
 using an unsupported function quietly returns 0. If a query returns 0 and the
 syntax "should" work, check the prefix in `everything_help`.
 
-### 7.6 Other rules worth knowing
+### 8.6 Other rules worth knowing
 
 - `sort` is an HTTP parameter, not query syntax; only `name`, `path`, `size`,
   `date_modified` are effective. Unknown values silently fall back to name.
@@ -895,12 +1023,12 @@ syntax "should" work, check the prefix in `everything_help`.
 - Prefer Everything-native syntax to regex: it is faster and clearer. Do not mix
   `regex=true` with `ext:`/`path:` functions.
 
-## 8. Recipes
+## 9. Recipes
 
 Full task-oriented versions of these (with agent-prompt examples and expected
 output shapes) are in [`docs/USAGE.md`](docs/USAGE.md).
 
-### 8.1 Search then filter
+### 9.1 Search then filter
 
 *"Find large installers modified this year under Downloads."*
 
@@ -915,7 +1043,7 @@ output shapes) are in [`docs/USAGE.md`](docs/USAGE.md).
 }
 ```
 
-### 8.2 Content grep with ripgrep
+### 9.2 Content grep with ripgrep
 
 *"Find every place the API base URL is hard-coded."*
 
@@ -929,7 +1057,7 @@ output shapes) are in [`docs/USAGE.md`](docs/USAGE.md).
 }
 ```
 
-### 8.3 Duplicate detection
+### 9.3 Duplicate detection
 
 *"Do I have duplicate files in this photo library?"*
 
@@ -940,7 +1068,7 @@ output shapes) are in [`docs/USAGE.md`](docs/USAGE.md).
 Escalate to `{"mode": "hash", "hash_algo": "sha256", "max_hash_bytes": 536870912}`
 when you need certainty.
 
-### 8.4 Recent changes
+### 9.4 Recent changes
 
 *"What did I touch today?"*
 
@@ -954,7 +1082,7 @@ or, scoped to a project:
 {"since": "today", "path_scope": "D:\\work\\my-app", "max_results": 50}
 ```
 
-### 8.5 Large-file audit
+### 9.5 Large-file audit
 
 *"Where did my disk space go?"* Two calls: aggregate by extension, then list the
 biggest files.
@@ -968,7 +1096,7 @@ biggest files.
  "fields": ["name", "path", "size"]}
 ```
 
-### 8.6 Cluster by extension or directory
+### 9.6 Cluster by extension or directory
 
 ```json
 {"group_by": "ext", "path_scope": "D:\\work\\my-app", "top_n": 20}
@@ -981,7 +1109,7 @@ biggest files.
 `group_by=size_bucket` gives a histogram, `month` groups by modification month,
 `parent` by immediate parent directory.
 
-### 8.7 Export to CSV
+### 9.7 Export to CSV
 
 *"Give me every log over 10 MB as a spreadsheet."*
 
@@ -999,7 +1127,7 @@ biggest files.
 The file lands in `EV_EXPORT_ROOT`; `rows`, `bytes` and `truncated` tell you whether
 you need another slice with `offset`.
 
-### 8.8 Custom presets
+### 9.8 Custom presets
 
 Set `EV_PRESETS_FILE` to a JSON file (a template is in
 [`examples/presets.json`](examples/presets.json)):
@@ -1025,7 +1153,7 @@ Then `{"action": "run", "name": "recent_downloads_7d"}`. Presets override
 built-ins by name; placeholders `{downloads}`, `{userprofile}` and `{workspace}`
 expand at runtime. JSON uses only the standard library; YAML needs PyYAML.
 
-### 8.9 Download a file
+### 9.9 Download a file
 
 ```json
 {"path": "D:\\work\\builds\\release.zip", "dest": "artifacts/release.zip", "max_bytes": 104857600}
@@ -1034,126 +1162,6 @@ expand at runtime. JSON uses only the standard library; YAML needs PyYAML.
 The destination resolves under `EV_DOWNLOAD_ROOT`; the call fails cleanly if the
 file grew beyond `max_bytes` or the destination escapes the root. This copies
 bytes over loopback HTTP — it is not a search operation.
-
-## 9. Benchmarks
-
-![Query latency on C:\Program Files](benchmarks/charts/latency_programfiles.png)
-
-![Speedup over the native recursive scan](benchmarks/charts/speedup.png)
-
-![Scaling with corpus size](benchmarks/charts/scaling.png)
-
-Measured 2026-10-18 on Windows 10 Pro (AMD Ryzen 7 5800H, 16 GB RAM), Everything 1.4.1.1024 with 3,243,750 index entries, Python 3.11.7. Native baseline: warm PowerShell 7.6.6 in one `-NoProfile` process; MCP: in-process call to the function behind each tool. Median of 3 samples (2 for `C:\Program Files`), one warm-up discarded; speedup = native scan ÷ MCP call. The run used `EV_SCAN_CAP=600000`; total runtime was 517 s.
-
-**C:\Windows\System32** — 17,616 files, 25,531 index entries
-
-| Scenario | Native scan (ms) | MCP (ms) | Speedup | Counts match |
-|---|---:|---:|---:|:---:|
-| Name glob | 510 | 1.0 | 519× | no |
-| Name regex | 812 | 65.7 | 12.4× | yes |
-| Type + size + date filter | 796 | 0.8 | 1,034× | no |
-| Bytes by extension | 760 | 346 | 2.2× | no |
-| Top-N largest | 774 | 0.9 | 885× | yes |
-| Files >= 100 MB | 693 | 1.3 | 514× | no |
-| Changed in last 7 days | 669 | 0.9 | 780× | no |
-
-**C:\Program Files** — 427,637 files, 554,843 index entries
-
-| Scenario | Native scan (ms) | MCP (ms) | Speedup | Counts match |
-|---|---:|---:|---:|:---:|
-| Name glob | 14,465 | 0.9 | 15,504× | no |
-| Type + size + date filter | 20,805 | 12.8 | 1,626× | no |
-| Bytes by extension | 22,804 | 7,959 | 2.9× | no |
-| Top-N largest | 27,435 | 8.7 | 3,154× | yes |
-| Files >= 100 MB | 21,336 | 17.9 | 1,189× | no |
-
-**synthetic corpus (30k files / 200 dirs)** — 30,000 files, 30,201 index entries
-
-| Scenario | Native scan (ms) | MCP (ms) | Speedup | Counts match |
-|---|---:|---:|---:|:---:|
-| Name glob | 179 | 1.1 | 162× | yes |
-| Name regex | 797 | 72.3 | 11.0× | yes |
-| Type + size + date filter | 438 | 1.0 | 453× | yes |
-| Bytes by extension | 554 | 526 | 1.1× | yes |
-| Top-N largest | 724 | 0.9 | 792× | yes |
-| Files >= 100 MB | 412 | 16.1 | 25.6× | yes |
-| Duplicate groups | 549 | 560 | 1.0× | yes |
-| Changed in last 7 days | 440 | 15.9 | 27.7× | no |
-| Content grep | 21,001 | 1,354 | 15.5× | yes |
-| Single small directory | 3.0 | 0.7 | 4.1× | yes |
-
-The MCP side was measured as an in-process call, so these timings exclude JSON-RPC transport: a separate end-to-end MCP stdio round-trip measured 5.74 ms median — add that for whole-call latency. Grouping and duplicate detection are the weak spot for the MCP side (about 1–3×) because they paginate the index over HTTP 1000 rows at a time. The 200-file directory case is near-parity in absolute terms: 3.0 ms versus 0.7 ms.
-
-**Why counts differ.** Rows marked `no` are legitimate differences, not errors: (a) ACL-protected subtrees such as `C:\Windows\System32\config\systemprofile` and `C:\Program Files\WindowsApps` are indexed by Everything but cannot be enumerated by a normal-user recursive scan — this is the largest difference and it makes the *index* counts higher; (b) Windows system directories churn, so some index entries lag the disk; (c) Everything's `dm:` filter is day-granular while the native baseline used an exact now-7×24h window; (d) `size:` units are KB-quantized. Counts are presented as information, not as a correctness gate — the query semantics and returned rows are what matter.
-
-### 9.1 Methodology
-
-The benchmark harness lives in [`benchmarks/`](benchmarks/) and is reproducible:
-`benchmarks/bench.py` drives both sides, `benchmarks/native_baseline.ps1` contains
-the PowerShell baseline, and `benchmarks/gen_dataset.py` generates the synthetic
-corpus.
-
-- **Same corpus, same query, both sides.** Each scenario runs against an identical
-  file set: a native PowerShell recursive scan and the equivalent Everything index
-  query, with the same path scope.
-- **Native baseline is warm, idiomatic PowerShell 7.6.6.** `Get-ChildItem`,
-  `Where-Object` and `findstr` run inside one `pwsh -NoProfile` process timed with
-  `[Diagnostics.Stopwatch]`. Shell startup is excluded, one warm-up pass is
-  discarded, and each scenario reports the median of 3 samples (2 samples for the
-  16–27-second `C:\Program Files` pass). Grouping uses an O(n) hashtable rather
-  than `Group-Object`, because PowerShell 5.1's `Group-Object` took 36 s on 30k
-  items — the baseline is idiomatic, not artificially slow. This is the *best case*
-  for a scan.
-- **The MCP side is the same code path, in-process.** Each measurement calls the
-  exact function behind the MCP tool with the same query and the same path scope; a
-  separate end-to-end stdio measurement reports JSON-RPC overhead (5.74 ms median on
-  the reference machine).
-- **Correctness is checked, not assumed.** Native and MCP hit counts are compared
-  per scenario; legitimate mismatches (result caps, index scope, ACL-protected
-  subtrees, KB-quantized `size:` syntax, day-granular `dm:`) are recorded in
-  `count_match` / `count_note` and explained above rather than hidden.
-- **Corpora:** `C:\Windows\System32` (small, ~17.6k files), `C:\Program Files`
-  (large, ~427.6k files), and a generated synthetic tree (30k files, 200
-  directories, known extension/size/mtime distribution, ~350 duplicate-related
-  files). The complete run used `EV_SCAN_CAP=600000` so aggregation scenarios could
-  cover all of `C:\Program Files`; every other setting was default.
-
-### 9.2 Fairness caveats — read this before quoting a number
-
-> **Honest summary:** these numbers compare a *prebuilt index query* with a *live
-> recursive scan*. They measure the value of having an index, not a magic faster
-> filesystem. On small or already-cached scopes the gap shrinks to near parity;
-> on large corpora and repeated queries it is large. Everything is Windows/NTFS
-> only, and `everything_grep` speed comes from ripgrep plus a small candidate set,
-> not from the index.
-
-- **The index is prebuilt and maintained.** Everything's advantage comes from
-  having already walked the filesystem once and tracking changes via the USN
-  journal. The benchmark compares a query against that index with a live scan; it
-  does not compare indexing cost with scan cost. Someone still pays to build and
-  maintain the index.
-- **Cold caches and tiny scopes erase the advantage.** On a small directory whose
-  metadata is already in RAM, a native scan can finish in a few milliseconds; the
-  MCP round trip plus HTTP query may be comparable or slower. The speedup grows
-  with corpus size and with repeated queries.
-- **Windows and NTFS only.** Everything cannot index Linux filesystems, network
-  shares (by default), FAT/exFAT volumes, or files outside the volumes you add to
-  it. There is no portable equivalent here.
-- **Content search is ripgrep, not Everything.** `everything_grep` speed depends on
-  the candidate tree, file sizes, ignore rules and the pattern — not on the
-  Everything index. It is still far faster than grepping a whole disk because the
-  candidate set is small.
-- **Aggregation and duplicate detection are the weakest case for the MCP side.**
-  `everything_summary` and `everything_duplicates` page through the index 1000 rows
-  per HTTP request, so their speedup is roughly 1–3× rather than the three-digit
-  numbers of a single filtered query. They are bounded and predictable, but they are
-  not where the index shines.
-- **Index memory and disk are real costs.** Everything keeps the index in memory
-  and on disk (hundreds of MB on a multi-million-entry machine). The benchmark
-  numbers do not include that footprint.
-- **Tool-call overhead is excluded from per-operation timings** except in the
-  explicitly reported stdio round-trip measurement. An agent pays that overhead on
-  every call.
 
 ## 10. Architecture
 
@@ -1258,7 +1266,7 @@ ripgrep instead of reading file contents in Python.
 - **Hour-level relative dates do not exist in 1.4.** `everything_changes`
   normalizes to date-level `dm:` and filters precisely client-side; `total` is a
   date-level candidate count.
-- **`size:` with units is KB-quantized**, not byte-exact (see §7.3).
+- **`size:` with units is KB-quantized**, not byte-exact (see §8.3).
 - **Content search depends on ripgrep** being installed or bundled. If it is
   missing, `everything_grep` fails with instructions; the other 12 tools are
   unaffected.

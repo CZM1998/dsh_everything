@@ -143,7 +143,7 @@ over embedding `path:` in `query` — it is easier for the model to get right.
 ```
 
 **Notes:** `size:` with `kb/mb/gb` is KB-quantized — see
-[README §7](../README.md#7-everything-query-syntax-cheat-sheet). For exact
+[README §8](../README.md#8-everything-query-syntax-cheat-sheet). For exact
 thresholds use bytes: `size:>10485760`. `dm:` is modification time; `dc:` and
 `da:` are not indexed by default and are very slow.
 
@@ -463,7 +463,7 @@ Never use it in a loop.
 ```
 
 **Notes:** eight built-ins ship with the server; add your own with
-`EV_PRESETS_FILE` (see [README §8.8](../README.md#88-custom-presets)). Presets
+`EV_PRESETS_FILE` (see [README §9.8](../README.md#98-custom-presets)). Presets
 support `{downloads}`, `{userprofile}` and `{workspace}` placeholders.
 
 ### 15. Batch metadata and hashes
@@ -572,7 +572,7 @@ should follow. Tool prefixes are omitted for readability.
    `date_run:` are 1.5-only and return 0 on 1.4. `ext:a,b` and `ext:py*` also
    return 0 — use semicolons and exact extensions.
 4. If it is a `size:` query, remember the KB quantization
-   ([README §7.3](../README.md#73-size--the-kb-quantization-trap)).
+   ([README §8.3](../README.md#83-size--the-kb-quantization-trap)).
 
 ### C. `everything_grep` cannot find ripgrep
 
