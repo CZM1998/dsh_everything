@@ -1,0 +1,58 @@
+# =============================================================================
+# DSH profile patch: register everything-mcp as an MCP stdio server
+# =============================================================================
+#
+# Where this goes
+#   %USERPROFILE%\.dsh\profiles\<PROFILE>\cordis.patch.yml
+#   For `dsh web` the profile is usually `web`.
+#
+# The patch file is a top-level YAML array of loader patch entries. Merge the
+# single item below into that array (do not create a second top-level array).
+#
+# BEFORE USE: replace every placeholder
+#   <PYTHON>        full path to python.exe, e.g. C:\Python311\python.exe
+#                   (run `where python` to find it; must be 3.10+)
+#   <PATH-TO-REPO>  where you cloned this repository, e.g. D:\work\dsh_everything
+#   <WORKSPACE>     directory the agent may read/write, e.g. D:\work
+#
+# After editing this file, restart `dsh web`. Hot-editing a running profile can
+# leave stale fibers in the current session and every tool call then fails with
+#   cannot get required service "sessionProjections" in inactive context
+# A restart of `dsh web` is the fix.
+#
+# Once the server starts, its tools appear in DSH as `mcp__everything__<tool>`
+# (e.g. mcp__everything__everything_search). Verify with
+# mcp__everything__everything_status.
+# =============================================================================
+
+- id: mcp-everything
+  name: "@deepseek-ai/dsh-mcp-client"
+  config:
+    # Tool namespace: mcp__everything__*
+    serverName: everything
+    transport: stdio
+    command: <PYTHON>
+    args:
+      - <PATH-TO-REPO>\server.py
+    # The agent's working directory; also the default for EV_*_ROOT below.
+    cwd: <WORKSPACE>
+    env:
+      EV_HTTP_HOST: "127.0.0.1"
+      EV_HTTP_PORT: "8090"                 # must match http_server_port in Everything.ini
+      EV_HTTP_TIMEOUT: "5"                 # 2s is fine for searches; 5s helps big pages/downloads
+      EV_AUTO_START: "1"                   # start Everything -startup if it is not running
+      EV_WORKSPACE_ROOT: "<WORKSPACE>"
+      EV_EXPORT_ROOT: "<WORKSPACE>"        # everything_export may only write here
+      EV_DOWNLOAD_ROOT: "<WORKSPACE>"      # everything_download may only write here
+      EV_SCAN_CAP: "50000"                 # rows scanned by summary/duplicates
+      EV_HASH_MAX_BYTES: "268435456"       # 256 MiB hashing budget
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
+      # Optional overrides, uncomment when needed:
+      # EV_RG_EXE: 'C:\path\to\rg.exe'           # else auto-detected (DSH bundled rg, PATH, known locations)
+      # EV_PRESETS_FILE: '<PATH-TO-REPO>\examples\presets.json'
+      # EV_ALLOW_SIDE_EFFECTS: '0'               # 0 = read-only mode; disables everything_reveal
+    # grep / summary / duplicates can take seconds; 30s is comfortable.
+    toolCallTimeoutMs: 30000
+    # Keep false so a broken MCP entry never blocks harness startup.
+    failOnStartupError: false

@@ -1,0 +1,538 @@
+{
+  "meta": {
+    "timestamp": "2026-10-18T12:08:36+08:00",
+    "os": "Windows 10 (10.0.19045)",
+    "cpu": "AMD64 Family 25 Model 80 Stepping 0, AuthenticAMD",
+    "machine": "AMD64",
+    "ram_gb": 15.8,
+    "python": "3.11.7",
+    "everything_version": "1.4.1.1024",
+    "everything_entries": 3243750,
+    "index_db_bytes": 135030266,
+    "reps": 3,
+    "programfiles_reps": 2,
+    "scan_cap": "600000",
+    "mcp_stdio_overhead_ms": 5.737,
+    "total_runtime_s": 516.8,
+    "notes": "native = warm idiomatic PowerShell scan in one -NoProfile process (shell startup excluded, one warm-up discarded); mcp = in-process call to the function behind the MCP tool. Counts are compared; count_match records discrepancies caused by index scope (hidden/system files, junctions) or Everything's KB-quantized size: syntax.",
+    "native_shell": "PowerShell 7.6.6"
+  },
+  "corpora": [
+    {
+      "id": "system32",
+      "label": "C:\\Windows\\System32",
+      "kind": "real-system",
+      "indexed_entries": 25531,
+      "files_native": 17616
+    },
+    {
+      "id": "programfiles",
+      "label": "C:\\Program Files",
+      "kind": "real-system",
+      "indexed_entries": 554843,
+      "files_native": 427637
+    },
+    {
+      "id": "synthetic",
+      "label": "synthetic corpus (30k files / 200 dirs)",
+      "kind": "synthetic",
+      "indexed_entries": 30201,
+      "files_native": 30000
+    }
+  ],
+  "scenarios": [
+    {
+      "scenario": "name_glob",
+      "corpus": "system32",
+      "native_ms": 510.38,
+      "mcp_ms": 0.983,
+      "speedup": 519.2,
+      "native_count": 4592,
+      "mcp_count": 4559,
+      "count_match": false,
+      "count_note": null,
+      "native_samples_ms": [
+        527.01,
+        510.38,
+        443.87
+      ],
+      "mcp_samples_ms": [
+        1.514,
+        0.983,
+        0.781
+      ],
+      "extra": {}
+    },
+    {
+      "scenario": "name_regex",
+      "corpus": "system32",
+      "native_ms": 812.35,
+      "mcp_ms": 65.727,
+      "speedup": 12.4,
+      "native_count": 103,
+      "mcp_count": 103,
+      "count_match": true,
+      "count_note": null,
+      "native_samples_ms": [
+        873.65,
+        812.35,
+        751.58
+      ],
+      "mcp_samples_ms": [
+        65.925,
+        65.727,
+        48.221
+      ],
+      "extra": {}
+    },
+    {
+      "scenario": "multi_filter",
+      "corpus": "system32",
+      "native_ms": 795.96,
+      "mcp_ms": 0.77,
+      "speedup": 1033.7,
+      "native_count": 544,
+      "mcp_count": 505,
+      "count_match": false,
+      "count_note": null,
+      "native_samples_ms": [
+        795.96,
+        924.01,
+        769.18
+      ],
+      "mcp_samples_ms": [
+        11.424,
+        0.77,
+        0.507
+      ],
+      "extra": {}
+    },
+    {
+      "scenario": "cluster_ext",
+      "corpus": "system32",
+      "native_ms": 760.46,
+      "mcp_ms": 346.097,
+      "speedup": 2.2,
+      "native_count": 17616,
+      "mcp_count": 20201,
+      "count_match": false,
+      "count_note": null,
+      "native_samples_ms": [
+        864.02,
+        710.88,
+        760.46
+      ],
+      "mcp_samples_ms": [
+        340.919,
+        346.097,
+        353.879
+      ],
+      "extra": {
+        "groups": 180,
+        "bytes": 9160804300
+      }
+    },
+    {
+      "scenario": "topn_largest",
+      "corpus": "system32",
+      "native_ms": 773.59,
+      "mcp_ms": 0.874,
+      "speedup": 885.1,
+      "native_count": 10,
+      "mcp_count": 10,
+      "count_match": true,
+      "count_note": null,
+      "native_samples_ms": [
+        856.91,
+        736.42,
+        773.59
+      ],
+      "mcp_samples_ms": [
+        0.874,
+        0.651,
+        21.03
+      ],
+      "extra": {}
+    },
+    {
+      "scenario": "big_file_stats",
+      "corpus": "system32",
+      "native_ms": 692.93,
+      "mcp_ms": 1.349,
+      "speedup": 513.7,
+      "native_count": 10,
+      "mcp_count": 11,
+      "count_match": false,
+      "count_note": "Everything's size: units are KB-quantized (size:>=100mb means >=100*1024 KiB in whole KiB), so boundary files can differ.",
+      "native_samples_ms": [
+        692.93,
+        708.82,
+        658.68
+      ],
+      "mcp_samples_ms": [
+        14.173,
+        1.349,
+        1.032
+      ],
+      "extra": {
+        "bytes": 1541477944
+      }
+    },
+    {
+      "scenario": "recent_changes",
+      "corpus": "system32",
+      "native_ms": 668.98,
+      "mcp_ms": 0.858,
+      "speedup": 779.7,
+      "native_count": 176,
+      "mcp_count": 376,
+      "count_match": false,
+      "count_note": "Everything's dm: filter is day-granular, while the native baseline used an exact now-7*24h window, so the index side sees up to ~24h more.",
+      "native_samples_ms": [
+        706.82,
+        668.98,
+        661.73
+      ],
+      "mcp_samples_ms": [
+        0.858,
+        0.971,
+        0.842
+      ],
+      "extra": {}
+    },
+    {
+      "scenario": "name_glob",
+      "corpus": "programfiles",
+      "native_ms": 14465.23,
+      "mcp_ms": 0.933,
+      "speedup": 15504.0,
+      "native_count": 46678,
+      "mcp_count": 52574,
+      "count_match": false,
+      "count_note": null,
+      "native_samples_ms": [
+        14124.1,
+        14806.36
+      ],
+      "mcp_samples_ms": [
+        0.749,
+        1.117
+      ],
+      "extra": {}
+    },
+    {
+      "scenario": "multi_filter",
+      "corpus": "programfiles",
+      "native_ms": 20805.22,
+      "mcp_ms": 12.799,
+      "speedup": 1625.5,
+      "native_count": 4131,
+      "mcp_count": 5375,
+      "count_match": false,
+      "count_note": null,
+      "native_samples_ms": [
+        20781.29,
+        20829.15
+      ],
+      "mcp_samples_ms": [
+        0.76,
+        24.837
+      ],
+      "extra": {}
+    },
+    {
+      "scenario": "cluster_ext",
+      "corpus": "programfiles",
+      "native_ms": 22804.25,
+      "mcp_ms": 7959.119,
+      "speedup": 2.9,
+      "native_count": 427637,
+      "mcp_count": 502817,
+      "count_match": false,
+      "count_note": null,
+      "native_samples_ms": [
+        22809.26,
+        22799.24
+      ],
+      "mcp_samples_ms": [
+        8046.055,
+        7872.183
+      ],
+      "extra": {
+        "groups": 1602,
+        "bytes": 127862718440
+      }
+    },
+    {
+      "scenario": "topn_largest",
+      "corpus": "programfiles",
+      "native_ms": 27434.9,
+      "mcp_ms": 8.697,
+      "speedup": 3154.5,
+      "native_count": 10,
+      "mcp_count": 10,
+      "count_match": true,
+      "count_note": null,
+      "native_samples_ms": [
+        27404.29,
+        27465.52
+      ],
+      "mcp_samples_ms": [
+        16.43,
+        0.965
+      ],
+      "extra": {}
+    },
+    {
+      "scenario": "big_file_stats",
+      "corpus": "programfiles",
+      "native_ms": 21336.02,
+      "mcp_ms": 17.938,
+      "speedup": 1189.4,
+      "native_count": 105,
+      "mcp_count": 129,
+      "count_match": false,
+      "count_note": "Everything's size: units are KB-quantized (size:>=100mb means >=100*1024 KiB in whole KiB), so boundary files can differ.",
+      "native_samples_ms": [
+        21894.73,
+        20777.31
+      ],
+      "mcp_samples_ms": [
+        20.447,
+        15.429
+      ],
+      "extra": {
+        "bytes": 29005047072
+      }
+    },
+    {
+      "scenario": "name_glob",
+      "corpus": "synthetic",
+      "native_ms": 179.16,
+      "mcp_ms": 1.105,
+      "speedup": 162.1,
+      "native_count": 5500,
+      "mcp_count": 5500,
+      "count_match": true,
+      "count_note": null,
+      "native_samples_ms": [
+        159.65,
+        179.16,
+        190.55
+      ],
+      "mcp_samples_ms": [
+        0.885,
+        1.105,
+        18.182
+      ],
+      "extra": {}
+    },
+    {
+      "scenario": "name_regex",
+      "corpus": "synthetic",
+      "native_ms": 796.68,
+      "mcp_ms": 72.309,
+      "speedup": 11.0,
+      "native_count": 5274,
+      "mcp_count": 5274,
+      "count_match": true,
+      "count_note": null,
+      "native_samples_ms": [
+        906.76,
+        796.68,
+        576.24
+      ],
+      "mcp_samples_ms": [
+        79.873,
+        60.279,
+        72.309
+      ],
+      "extra": {}
+    },
+    {
+      "scenario": "multi_filter",
+      "corpus": "synthetic",
+      "native_ms": 437.97,
+      "mcp_ms": 0.967,
+      "speedup": 452.9,
+      "native_count": 569,
+      "mcp_count": 569,
+      "count_match": true,
+      "count_note": null,
+      "native_samples_ms": [
+        437.97,
+        430.51,
+        464.81
+      ],
+      "mcp_samples_ms": [
+        25.385,
+        0.967,
+        0.743
+      ],
+      "extra": {}
+    },
+    {
+      "scenario": "cluster_ext",
+      "corpus": "synthetic",
+      "native_ms": 553.62,
+      "mcp_ms": 526.153,
+      "speedup": 1.1,
+      "native_count": 30000,
+      "mcp_count": 30000,
+      "count_match": true,
+      "count_note": null,
+      "native_samples_ms": [
+        580.23,
+        508.94,
+        553.62
+      ],
+      "mcp_samples_ms": [
+        535.279,
+        526.153,
+        401.056
+      ],
+      "extra": {
+        "groups": 8,
+        "bytes": 1617800435
+      }
+    },
+    {
+      "scenario": "topn_largest",
+      "corpus": "synthetic",
+      "native_ms": 723.97,
+      "mcp_ms": 0.914,
+      "speedup": 792.1,
+      "native_count": 10,
+      "mcp_count": 10,
+      "count_match": true,
+      "count_note": null,
+      "native_samples_ms": [
+        767.44,
+        723.97,
+        718.7
+      ],
+      "mcp_samples_ms": [
+        19.88,
+        0.914,
+        0.711
+      ],
+      "extra": {}
+    },
+    {
+      "scenario": "big_file_stats",
+      "corpus": "synthetic",
+      "native_ms": 411.84,
+      "mcp_ms": 16.075,
+      "speedup": 25.6,
+      "native_count": 5,
+      "mcp_count": 5,
+      "count_match": true,
+      "count_note": null,
+      "native_samples_ms": [
+        411.84,
+        401.52,
+        422.24
+      ],
+      "mcp_samples_ms": [
+        21.58,
+        16.075,
+        1.102
+      ],
+      "extra": {
+        "bytes": 807403520
+      }
+    },
+    {
+      "scenario": "duplicates",
+      "corpus": "synthetic",
+      "native_ms": 548.6,
+      "mcp_ms": 560.098,
+      "speedup": 1.0,
+      "native_count": 6185,
+      "mcp_count": 6185,
+      "count_match": true,
+      "count_note": null,
+      "native_samples_ms": [
+        530.63,
+        550.79,
+        548.6
+      ],
+      "mcp_samples_ms": [
+        512.597,
+        560.098,
+        615.477
+      ],
+      "extra": {
+        "files": 30000
+      }
+    },
+    {
+      "scenario": "recent_changes",
+      "corpus": "synthetic",
+      "native_ms": 440.02,
+      "mcp_ms": 15.911,
+      "speedup": 27.7,
+      "native_count": 750,
+      "mcp_count": 767,
+      "count_match": false,
+      "count_note": "Everything's dm: filter is day-granular, while the native baseline used an exact now-7*24h window, so the index side sees up to ~24h more.",
+      "native_samples_ms": [
+        418.9,
+        440.02,
+        490.8
+      ],
+      "mcp_samples_ms": [
+        0.865,
+        16.323,
+        15.911
+      ],
+      "extra": {}
+    },
+    {
+      "scenario": "content_grep",
+      "corpus": "synthetic",
+      "native_ms": 21001.33,
+      "mcp_ms": 1354.405,
+      "speedup": 15.5,
+      "native_count": 350,
+      "mcp_count": 350,
+      "count_match": true,
+      "count_note": null,
+      "native_samples_ms": [
+        20893.1,
+        21020.67,
+        21001.33
+      ],
+      "mcp_samples_ms": [
+        1382.736,
+        1354.405,
+        1289.262
+      ],
+      "extra": {
+        "searched": 29995
+      }
+    },
+    {
+      "scenario": "small_scope",
+      "corpus": "synthetic",
+      "native_ms": 3.01,
+      "mcp_ms": 0.743,
+      "speedup": 4.1,
+      "native_count": 90,
+      "mcp_count": 90,
+      "count_match": true,
+      "count_note": null,
+      "native_samples_ms": [
+        3.17,
+        3.01,
+        2.94
+      ],
+      "mcp_samples_ms": [
+        0.985,
+        0.743,
+        0.709
+      ],
+      "extra": {}
+    }
+  ]
+}

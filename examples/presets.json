@@ -1,0 +1,67 @@
+{
+  "presets": [
+    {
+      "name": "recent_downloads_7d",
+      "description": "Files modified in the last 7 days inside the current user's Downloads folder",
+      "query": "dm:last7days",
+      "path_scope": "{downloads}",
+      "sort": "date_modified",
+      "ascending": false,
+      "max_results": 100,
+      "fields": ["name", "path", "size", "date_modified"]
+    },
+    {
+      "name": "large_videos_500mb",
+      "description": "Video files larger than 500 MB, largest first",
+      "query": "size:>500mb ext:mp4;mkv;avi;mov;wmv;flv;webm",
+      "sort": "size",
+      "ascending": false,
+      "max_results": 100,
+      "fields": ["name", "path", "size", "date_modified"]
+    },
+    {
+      "name": "installers_recent",
+      "description": "Recently modified installers (msi/exe/msix) in Downloads",
+      "query": "dm:last30days ext:msi;exe;msix",
+      "path_scope": "{downloads}",
+      "sort": "date_modified",
+      "ascending": false,
+      "max_results": 50
+    },
+    {
+      "name": "python_projects",
+      "description": "Directories that contain a pyproject.toml (Python project roots)",
+      "query": "wfn:pyproject.toml",
+      "sort": "path",
+      "ascending": true,
+      "max_results": 200
+    },
+    {
+      "name": "node_projects",
+      "description": "package.json files, i.e. potential Node project roots",
+      "query": "wfn:package.json",
+      "sort": "path",
+      "ascending": true,
+      "max_results": 200
+    },
+    {
+      "name": "logs_30d",
+      "description": "Log/text files modified in the last 30 days",
+      "query": "dm:last30days ext:log;txt",
+      "sort": "date_modified",
+      "ascending": false,
+      "max_results": 200,
+      "fields": ["name", "path", "size", "date_modified"]
+    },
+    {
+      "name": "workspace_docs",
+      "description": "Documents inside the configured workspace, newest first",
+      "query": "ext:md;txt;pdf;docx",
+      "path_scope": "{workspace}",
+      "sort": "date_modified",
+      "ascending": false,
+      "max_results": 100,
+      "fields": ["name", "path", "size", "date_modified"]
+    }
+  ]
+}

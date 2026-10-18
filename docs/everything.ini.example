@@ -1,0 +1,20 @@
+; Everything HTTP Server -- minimal configuration snippet.
+;
+; Everything (voidtools) reads its settings from
+;   %APPDATA%\Everything\Everything.ini
+; Merge the three keys below into that file (do not replace the whole file),
+; then fully exit Everything and start it again so the new values take effect.
+;
+; Security:
+;   * http_server_bindings must be an IP address only. Writing
+;     "127.0.0.1:8090" (with a port) silently disables the HTTP server.
+;   * Never use 0.0.0.0 or a LAN address: the HTTP API has no authentication
+;     and exposes the whole file index of this machine.
+;
+; Optional:
+;   * http_server_allow_file_download=1 enables the everything_download tool
+;     (lets loopback HTTP clients read indexed files). Leave it unset/0 when
+;     file download is not needed.
+http_server_enabled=1
+http_server_port=8090
+http_server_bindings=127.0.0.1

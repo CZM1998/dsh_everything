@@ -1,0 +1,45 @@
+{
+  "seed": 20261018,
+  "generated_at": "2026-10-18T03:51:57+00:00",
+  "root": ".data",
+  "total_files": 30000,
+  "total_dirs": 200,
+  "max_depth": 3,
+  "total_bytes": 1617800435,
+  "extensions": [
+    "txt",
+    "log",
+    "json",
+    "py",
+    "md",
+    "bin",
+    "dat",
+    "img"
+  ],
+  "counts_per_ext": {
+    "txt": 6805,
+    "log": 5500,
+    "json": 4492,
+    "py": 3533,
+    "md": 2851,
+    "bin": 2821,
+    "dat": 2494,
+    "img": 1504
+  },
+  "size_buckets": {
+    "1KB-10KB": 12490,
+    "10KB-100KB": 16014,
+    "100KB-1MB": 1491,
+    "1MB-10MB": 0,
+    "10MB-50MB": 0,
+    ">=100MB": 5
+  },
+  "duplicate_groups": 300,
+  "duplicate_files": 848,
+  "large_files_100mb": 5,
+  "recent_files_7d": 750,
+  "content_token": "benchmark-token",
+  "content_token_files": 194,
+  "filename_pattern": "item-<5 digits>-<7 hex>.<ext> / dupe-... / huge-...",
+  "notes": "Sizes are lognormal (median ~12 KiB) within [1 KiB, 50 MiB]; the text family is capped at 256 KiB so the content-grep scenario stays fair. Files > 100 MiB are written as a header plus truncate (sparse-ish)."
+}

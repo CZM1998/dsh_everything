@@ -1,0 +1,29 @@
+{
+  "$comment": [
+    "Generic MCP stdio client configuration (Claude Desktop / MCP Inspector /",
+    "any client that accepts the common mcpServers JSON shape).",
+    "Replace <PYTHON>, <PATH-TO-REPO> and <WORKSPACE> before use.",
+    "Windows paths are JSON-escaped (\\\\). Use forward slashes if you prefer.",
+    "For DSH use examples/cordis.patch.yml instead: DSH profiles are YAML patches."
+  ],
+  "mcpServers": {
+    "everything": {
+      "command": "<PYTHON>",
+      "args": ["<PATH-TO-REPO>\\server.py"],
+      "cwd": "<WORKSPACE>",
+      "env": {
+        "EV_HTTP_HOST": "127.0.0.1",
+        "EV_HTTP_PORT": "8090",
+        "EV_HTTP_TIMEOUT": "5",
+        "EV_AUTO_START": "1",
+        "EV_WORKSPACE_ROOT": "<WORKSPACE>",
+        "EV_EXPORT_ROOT": "<WORKSPACE>",
+        "EV_DOWNLOAD_ROOT": "<WORKSPACE>",
+        "EV_SCAN_CAP": "50000",
+        "EV_HASH_MAX_BYTES": "268435456",
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8"
+      }
+    }
+  }
+}
