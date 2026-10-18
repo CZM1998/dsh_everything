@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dsh-everything-mcp"
+version = "2.0.0"
+description = "Everything-powered MCP server for AI agents: millisecond file search, filtering, aggregation, duplicate detection and content grep on Windows"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "CZM1998" }]
+keywords = [
+    "mcp",
+    "model-context-protocol",
+    "everything",
+    "voidtools",
+    "file-search",
+    "windows",
+    "dsh",
+    "ai-agent",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Desktop Environment :: File Managers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Filesystems",
+    "Typing :: Typed",
+]
+dependencies = ["mcp>=1.2.0"]
+
+[project.urls]
+Homepage = "https://github.com/CZM1998/dsh_everything"
+Repository = "https://github.com/CZM1998/dsh_everything"
+Issues = "https://github.com/CZM1998/dsh_everything/issues"
+Changelog = "https://github.com/CZM1998/dsh_everything/blob/master/CHANGELOG.md"
+
+[project.scripts]
+dsh-everything-mcp = "everything_mcp.server:main"
+
+[tool.setuptools]
+packages = ["everything_mcp"]
+include-package-data = false
+zip-safe = false

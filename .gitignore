@@ -1,0 +1,42 @@
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---------------------------------------------------------------------------
+# Local development artifacts (must never be published)
+#   dev/ holds machine-specific Everything .ini files, backups and ad-hoc
+#   self-test scripts; benchmarks/.data holds generated corpora.
+# ---------------------------------------------------------------------------
+/dev/
+/benchmarks/.data/
+/benchmarks/results/*.tmp
+*.log
+
+# Local privacy blocklist (owner-specific terms, never published)
+/.privacy-blocklist
+
+# ---------------------------------------------------------------------------
+# OS / editors
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
